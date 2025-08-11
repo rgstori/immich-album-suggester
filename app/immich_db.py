@@ -82,6 +82,22 @@ def _table_exists(conn, schema: str, table: str) -> bool:
         return (row[0] if not isinstance(row, dict) else list(row.values())[0])
 
 
+def _column_exists(conn, schema: str, table: str, column: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = %s
+                  AND column_name = %s
+            )
+        """, (schema, table, column))
+        row = cur.fetchone()
+        # Support both tuple and dict rows
+        return (row[0] if not isinstance(row, dict) else list(row.values())[0])
+
+
 def _list_tables(conn, schema: str) -> list[str]:
     with conn.cursor() as cur:
         cur.execute("""
@@ -158,6 +174,16 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
 
     print(f"  - [DB] Using schema '{schema}' with tables: asset='{asset_tbl}', exif='{exif_tbl}', smart_search='{smart_tbl}'")
 
+    # Build dynamic filters depending on available columns (e.g., isArchived may not exist)
+    # We always filter out soft-deleted assets (deletedAt IS NULL).
+    filters = ['a."deletedAt" IS NULL']
+    has_is_archived_camel = _column_exists(conn, schema, asset_tbl, "isArchived")
+    has_is_archived_snake = _column_exists(conn, schema, asset_tbl, "is_archived")
+    if has_is_archived_camel:
+        filters.append('COALESCE(a."isArchived", false) = false')
+    elif has_is_archived_snake:
+        filters.append('COALESCE(a."is_archived", false) = false')
+
     # The main query gathers all data in one pass.
     # LEFT JOIN is used for EXIF to include assets that may not have EXIF data.
     # INNER JOIN is used for smart_search, as assets without an embedding
@@ -178,8 +204,7 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
     LEFT JOIN
         "{schema}"."{exif_tbl}" ae ON a.id = ae."assetId"
     WHERE
-        a."isArchived" = false AND
-        a."deletedAt" IS NULL
+        { ' AND '.join(filters) }
     """
 
     # Handle exclusions for incremental mode
@@ -198,6 +223,7 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
         if limit and isinstance(limit, int):
             query += f" LIMIT {limit}"
             print(f"  - [DB] DEV MODE: Limiting fetch to {limit} most recent assets.")
+    print(f"  - [DB] Applying filters: {' AND '.join(filters)}")
 
     try:
         # Using cursor instead of pandas read_sql_query to avoid the warning

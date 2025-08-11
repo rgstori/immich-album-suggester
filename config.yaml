@@ -7,6 +7,12 @@ dev_mode:
   enabled: true
   sample_size: 2000 # Max assets to fetch in dev mode.
 
+# --- Postgres ---
+# Optional override for the DB schema (otherwise uses DB_SCHEMA env or 'public')
+postgres:
+  schema: "public"
+
+
 # --- Service Connection Details ---
 immich:
   # Secrets like URL and API_KEY are loaded from .env, not stored here.

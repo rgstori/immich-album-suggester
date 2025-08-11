@@ -13,6 +13,8 @@ import random
 import yaml
 import dotenv
 from datetime import datetime
+import os
+from pathlib import Path
 
 # Import our application modules using relative paths
 
@@ -21,9 +23,15 @@ from . import immich_db, clustering, vlm, geocoding, immich_api
 # --- DATABASE HELPERS for suggestions.db ---
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "suggestions.db"
+
+
 def init_suggestions_db():
     """Initializes the SQLite database and creates tables if they don't exist."""
-    with sqlite3.connect("suggestions.db") as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS suggestions (
@@ -47,23 +55,29 @@ def init_suggestions_db():
 
 def get_processed_asset_ids() -> list:
     """Gets all asset IDs that are already in any suggestion."""
-    with sqlite3.connect("suggestions.db") as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        # Ensure the JSON columns are not NULL before processing
-        cursor.execute("SELECT strong_asset_ids_json, weak_asset_ids_json FROM suggestions WHERE strong_asset_ids_json IS NOT NULL")
+        # Fetch all suggestions; handle NULLs per-row
+        cursor.execute("SELECT strong_asset_ids_json, weak_asset_ids_json FROM suggestions")
         rows = cursor.fetchall()
         
         processed_ids = set()
-        for row in rows:
-            strong_ids = json.loads(row or '[]')
-            weak_ids = json.loads(row or '[]')
+        for strong_json, weak_json in rows:
+            try:
+                strong_ids = json.loads(str(strong_json) if strong_json else '[]')
+            except json.JSONDecodeError:
+                strong_ids = []
+            try:
+                weak_ids = json.loads(str(weak_json) if weak_json else '[]')
+            except json.JSONDecodeError:
+                weak_ids = []
             processed_ids.update(strong_ids)
             processed_ids.update(weak_ids)
         return list(processed_ids)
 
 def store_suggestion(suggestion_data: dict):
     """Stores a finalized album suggestion in the SQLite database."""
-    with sqlite3.connect("suggestions.db") as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("""
         INSERT INTO suggestions (created_at, vlm_title, vlm_description, strong_asset_ids_json, weak_asset_ids_json, cover_asset_id)
@@ -81,7 +95,7 @@ def store_suggestion(suggestion_data: dict):
 def log_to_db(level: str, message: str):
     """Writes a log entry to the SQLite database for the UI."""
     print(message) # Also print to console for command-line debugging
-    with sqlite3.connect("suggestions.db") as conn:
+    with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
         cursor.execute("INSERT INTO scan_logs (timestamp, level, message) VALUES (?, ?, ?)", (datetime.now(), level, message))
         conn.commit()
@@ -99,6 +113,13 @@ def main():
     # 1. Load Configuration
     with open('config.yaml', 'r') as f:
         config = yaml.safe_load(f)
+
+    # Ensure Immich connection details are present for the engine
+    # Falls back to environment variables if not set in config.yaml
+    if 'immich' not in config:
+        config['immich'] = {}
+    config['immich'].setdefault('url', os.getenv('IMMICH_URL'))
+    config['immich'].setdefault('api_key', os.getenv('IMMICH_API_KEY'))
 
     init_suggestions_db()
     log_to_db("INFO", f"--- Scan started in '{args.mode}' mode ---")

@@ -7,11 +7,18 @@ import immich_python_sdk
 import requests
 from PIL import Image
 from io import BytesIO
+import os
+import sys
 
 def get_api_client(config: dict) -> immich_python_sdk.ApiClient:
     """Initializes and returns the Immich SDK API client."""
-    configuration = immich_python_sdk.Configuration(host=config['immich']['url'])
-    configuration.api_key['api_key'] = config['immich']['api_key']
+    immich_cfg = (config or {}).get('immich', {}) if isinstance(config, dict) else {}
+    host = immich_cfg.get('url') or os.getenv('IMMICH_URL')
+    api_key = immich_cfg.get('api_key') or os.getenv('IMMICH_API_KEY')
+    if not host or not api_key:
+        raise ValueError("Immich API configuration is missing. Set immich.url and immich.api_key in config.yaml or provide IMMICH_URL and IMMICH_API_KEY environment variables.")
+    configuration = immich_python_sdk.Configuration(host=host)
+    configuration.api_key['api_key'] = api_key
     return immich_python_sdk.ApiClient(configuration)
 
 def download_and_convert_image(api_client: immich_python_sdk.ApiClient, asset_id: str, config: dict) -> bytes | None:
