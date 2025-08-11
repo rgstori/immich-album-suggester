@@ -1,0 +1,60 @@
+# config.yaml
+# Central configuration for the Immich Album Suggester.
+# This file allows tuning of all major parameters without changing the code.
+
+# --- Development and Execution Toggles ---
+dev_mode:
+  enabled: true
+  sample_size: 2000 # Max assets to fetch in dev mode.
+
+# --- Service Connection Details ---
+immich:
+  # Secrets like URL and API_KEY are loaded from .env, not stored here.
+  api_timeout_seconds: 45 # Timeout for API calls like thumbnail downloads.
+
+vlm:
+  enabled: true
+  api_url: "http://192.168.50.36:11434/api/generate"
+  api_timeout_seconds: 300 # Generous timeout for VLM inference.
+  model: "llava"           # The model to use in Ollama.
+  context_window: 16384    # The context window size (num_ctx).
+  sample_size: 10          # Number of photos to send to the VLM per album.
+  # The full prompt for the VLM. Using YAML's block scalar for readability.
+  prompt: |
+    You are an automated photo album assistant. Analyze the provided images and context. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
+    CONTEXT: Event Date: '{date_str}'. {location_prompt}
+    JSON STRUCTURE: {"title": "string", "description": "string", "highlights": [int], "cover_photo_index": int}
+
+geocoding:
+  user_agent: "immich_album_suggester_v2" # User agent for the Nominatim API.
+  api_timeout_seconds: 10
+  sample_size: 5 # Max GPS points to check per album for location lookup.
+
+# --- Clustering Algorithm Tuning ---
+clustering:
+  # Stage 1: Fine-tunes the creation of small, dense "eventlets".
+  stage1:
+    time_window_seconds: 21600   # 6 hours. Max time gap within an eventlet.
+    space_window_degrees: 0.005  # ~500 meters. Max distance gap within an eventlet.
+    min_cluster_size: 5        # Min photos to be considered an eventlet.
+
+  # Stage 2: Fine-tunes how eventlets are merged into final albums.
+  stage2:
+    merge_similarity_threshold: 0.15 # Max cosine distance for embeddings. Lower is more similar.
+    merge_time_window_days: 3        # Max time gap between eventlets to consider merging.
+    min_eventlets_for_album: 2       # An album must consist of at least 2 merged eventlets.
+
+# --- Fallback Text Templates ---
+# Used when the VLM fails or is disabled.
+defaults:
+  title_template: "Album from {date_str}"
+  description: "An automatically generated album."
+
+# --- UI Settings ---
+# Configure the look, feel, and behavior of the Streamlit Web UI.
+ui:
+  page_title: "Immich Album Suggester"
+  welcome_header: "Welcome to the Immich Album Suggester"
+  welcome_info: "Select a pending suggestion from the sidebar to review it, or start a new scan."
+  thumbnails_per_page: 30
+  gallery_columns: 6

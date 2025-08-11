@@ -1,0 +1,29 @@
+      
+# docker-compose.yml
+version: '3.8'
+
+services:
+  album-suggester:
+    container_name: album_suggester_ui
+    build:
+      context: .
+    ports:
+      # This is the key part: It maps port 8501 inside the container
+      # to port 8501 on your MacBook's localhost.
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # Mount the source code for live-reloading during development
+      - ./app:/usr/src/app/app
+      - ./ui.py:/usr/src/app/ui.py
+      - ./config.yaml:/usr/src/app/config.yaml
+      # Mount the SQLite database file to persist suggestions
+      - ./suggestions.db:/usr/src/app/suggestions.db
+#
+# The entire 'networks' section can be removed.
+# The container will use the default 'bridge' network, which is all it needs
+# to access external IPs like your NAS (192.168.50.77).
+#
+
+    

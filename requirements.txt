@@ -1,0 +1,13 @@
+# requirements.txt
+psycopg2-binary
+python-dotenv
+pandas
+scikit-learn
+numpy
+immich-python-sdk
+networkx
+requests
+Pillow
+geopy
+streamlit
+PyYAML
