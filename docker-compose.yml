@@ -18,12 +18,7 @@ services:
       - ./app:/usr/src/app/app
       - ./ui.py:/usr/src/app/ui.py
       - ./config.yaml:/usr/src/app/config.yaml
-      # Mount a dedicated data directory to persist the SQLite DB.
+      # Mount a dedicated data directory to persist the SQLite DB
+      # Create this directory on your host first
       - ./data:/usr/src/app/data
-#
-# The entire 'networks' section can be removed.
-# The container will use the default 'bridge' network, which is all it needs
-# to access external IPs like your NAS (192.168.50.77).
-#
-
-    
+    restart: unless-stopped

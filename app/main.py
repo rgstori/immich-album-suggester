@@ -11,9 +11,11 @@ import sqlite3
 import json
 import random
 import yaml
+import dotenv
 from datetime import datetime
 
 # Import our application modules using relative paths
+
 from . import immich_db, clustering, vlm, geocoding, immich_api
 
 # --- DATABASE HELPERS for suggestions.db ---
@@ -87,6 +89,9 @@ def log_to_db(level: str, message: str):
 # --- MAIN ORCHESTRATION ---
 
 def main():
+    # Load environment variables from .env file for the backend process
+    dotenv.load_dotenv()
+
     parser = argparse.ArgumentParser(description="Immich Album Suggester Engine")
     parser.add_argument('--mode', type=str, choices=['incremental', 'full'], required=True, help="Scan mode.")
     args = parser.parse_args()

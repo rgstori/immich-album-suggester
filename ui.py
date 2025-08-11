@@ -19,6 +19,7 @@ import dotenv
 import yaml
 import sys
 import os
+import requests
 
 from pathlib import Path
 
