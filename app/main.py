@@ -18,6 +18,7 @@ from . import immich_db, clustering, vlm, geocoding, immich_api
 
 # --- DATABASE HELPERS for suggestions.db ---
 
+
 def init_suggestions_db():
     """Initializes the SQLite database and creates tables if they don't exist."""
     with sqlite3.connect("suggestions.db") as conn:
@@ -133,45 +134,34 @@ def main():
         date_str = candidate['min_date'].strftime('%B %Y') # e.g., "July 2025"
         location_str = geocoding.get_primary_location(candidate['gps_coords'], config)
         
-        # Default values
+        # Start with default values for the suggestion.
         suggestion = {
             "vlm_title": config['defaults']['title_template'].format(date_str=date_str),
             "vlm_description": config['defaults']['description'],
             "cover_asset_id": random.choice(all_asset_ids) if all_asset_ids else None,
             **candidate
         }
-
-        # Get VLM Analysis
-        if config['vlm']['enabled'] and sample_assets:
-            sample_size = config['vlm']['sample_size']
-            sample_assets = random.sample(all_asset_ids, min(len(all_asset_ids), sample_size))
-            
-            vlm_result = vlm.get_vlm_analysis(api_client, sample_assets, date_str, location_str, config)
-        suggestion = {
-            "vlm_title": f"Album from {date_str}",
-            "vlm_description": "An automatically generated album.",
-            "cover_asset_id": random.choice(all_asset_ids),
-            **candidate
-        }
-
-        # Get VLM Analysis
+        
+        # If VLM is enabled, attempt to get a more detailed analysis.
         if config['vlm']['enabled']:
             sample_size = config['vlm']['sample_size']
             sample_assets = random.sample(all_asset_ids, min(len(all_asset_ids), sample_size))
             
-            vlm_result = vlm.get_vlm_analysis(api_client, sample_assets, date_str, location_str, config)
-            
-            ### --- UPDATED SECTION (Flexible VLM Result Handling) --- ###
-            if vlm_result:
-                # Use returned values for core fields
-                suggestion['vlm_title'] = vlm_result['title']
-                suggestion['vlm_description'] = vlm_result['description']
+            try:
+                vlm_result = vlm.get_vlm_analysis(api_client, sample_assets, date_str, location_str, config)
                 
-                # Safely get optional fields like cover_photo_index
-                cover_index = vlm_result.get('cover_photo_index')
-                if cover_index is not None and isinstance(cover_index, int) and cover_index < len(sample_assets):
-                    suggestion['cover_asset_id'] = sample_assets[cover_index]
-        
+                if vlm_result:
+                    # Override defaults with VLM results if successful.
+                    suggestion['vlm_title'] = vlm_result['title']
+                    suggestion['vlm_description'] = vlm_result['description']
+                    
+                    cover_index = vlm_result.get('cover_photo_index')
+                    if cover_index is not None and isinstance(cover_index, int) and cover_index < len(sample_assets):
+                        suggestion['cover_asset_id'] = sample_assets[cover_index]
+            except Exception as e:
+                # If VLM fails, log the error to the DB for UI visibility and continue with defaults.
+                log_to_db("ERROR", f"VLM analysis failed for candidate {i+1}: {e}")
+                        
         # 6. Store final suggestion in DB
         store_suggestion(suggestion)
         log_to_db("INFO", f"Stored suggestion: '{suggestion['vlm_title']}'")

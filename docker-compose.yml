@@ -18,8 +18,8 @@ services:
       - ./app:/usr/src/app/app
       - ./ui.py:/usr/src/app/ui.py
       - ./config.yaml:/usr/src/app/config.yaml
-      # Mount the SQLite database file to persist suggestions
-      - ./suggestions.db:/usr/src/app/suggestions.db
+      # Mount a dedicated data directory to persist the SQLite DB.
+      - ./data:/usr/src/app/data
 #
 # The entire 'networks' section can be removed.
 # The container will use the default 'bridge' network, which is all it needs

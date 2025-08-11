@@ -20,13 +20,15 @@ import sys
 import os
 from pathlib import Path
 
-# Database configuration
-DB_PATH = Path('data/suggestions.db')
+# Use a path relative to the script file for robustness
+APP_DIR = Path(__file__).parent
+DB_PATH = APP_DIR / "suggestions.db"
 
-# Ensure the data directory exists
+# Ensure the database file's parent directory exists
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # --- Section 1: Data & State Management ---
+
 
 @contextmanager
 def get_db_connection():
@@ -144,8 +146,51 @@ def clear_scan_logs():
         cursor.execute("DELETE FROM scan_logs")
         conn.commit()
 
+def pre_flight_checks():
+    """
+    Verifies that the application is correctly configured before launching the UI.
+    Checks for config.yaml and required environment variables.
+    Returns True if all checks pass, False otherwise.
+    """
+    # 1. Check for config.yaml
+    config_path = APP_DIR / 'config.yaml'
+    if not config_path.is_file():
+        st.error(
+            f"**Configuration Error:** `config.yaml` not found at `{config_path}`."
+            "\nPlease ensure the configuration file is in the root directory of the application.",
+            icon="🚨"
+        )
+        return False
+    
+    # 2. Check for required environment variables
+    required_env_vars = [
+        "IMMICH_URL",
+        "IMMICH_API_KEY",
+        "POSTGRES_DB",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "DB_HOSTNAME",
+        "DB_PORT"
+    ]
+    
+    missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+    
+    if missing_vars:
+        st.error(
+            "**Configuration Error:** The following required environment variables are not set:"
+            f"\n\n```\n{', '.join(missing_vars)}\n```\n\n"
+            "Please create a `.env` file in the application's root directory or set these "
+            "variables in your environment before launching.",
+            icon="🚨"
+        )
+        return False
+        
+    return True
+
+
 # --- Section 2: Backend & API Interaction ---
 # This section contains functions that perform long-running actions or
+
 # communicate with external services like the Immich API and the backend
 # clustering script.
 
@@ -208,24 +253,27 @@ def trigger_album_creation(suggestion: dict, included_weak_assets: set):
     try:
         # We need to load the main config to get API keys etc.
         # This assumes config.yaml is in the root.
-        with open('config.yaml', 'r') as f:
+        with open(APP_DIR / 'config.yaml', 'r') as f:
             config = yaml.safe_load(f)
 
-        # Secrets are loaded from env vars by the SDK/connector
+        # Manually inject env vars into the config dict for the API client
+        config['immich']['url'] = os.getenv("IMMICH_URL")
         config['immich']['api_key'] = os.getenv("IMMICH_API_KEY")
 
-        with get_api_client(config) as api_client:
-            success = create_immich_album(
+        api_client = get_api_client(config)
+        success = create_immich_album(
                 api_client=api_client,
                 title=title,
                 asset_ids=final_asset_ids,
+
                 cover_asset_id=cover_id,
                 highlight_ids=highlight_ids
             )
         return success
-    except Exception as e:
+    except (FileNotFoundError, KeyError, Exception) as e:
         st.error(f"Failed to create album. Error: {e}")
         return False
+
 
 @st.cache_data(show_spinner=False)
 def get_thumbnail_url(asset_id: str) -> str:
@@ -292,10 +340,12 @@ def render_scan_controls():
     st.sidebar.subheader("Scan Controls")
 
     # Disable buttons if a scan is currently running.
-    is_scan_running = st.session_state.get('scan_process') and st.session_state.scan_process.poll() is None
+    # FIX: Explicitly cast to bool to prevent TypeError when the process object is None.
+    is_scan_running = bool(st.session_state.get('scan_process')) and st.session_state.scan_process.poll() is None
     
     col1, col2 = st.sidebar.columns(2)
     if col1.button("Incremental Scan", use_container_width=True, disabled=is_scan_running):
+
         start_scan_process(mode='incremental')
         st.rerun() # Rerun to immediately show the progress UI
 
@@ -305,30 +355,38 @@ def render_scan_controls():
 
     # This section is the live monitor, only visible during a scan.
     if is_scan_running:
+        # REWRITE: This section no longer uses a blocking `while` loop.
+        # It fetches new logs on each Streamlit rerun, making the UI responsive.
         with st.sidebar.container(border=True):
             st.info("Scan in progress...")
-            progress_bar = st.progress(0, text="Initializing...")
-            log_container = st.empty()
+            log_placeholder = st.empty()
             
-            # Continuously check for updates until the process completes.
-            while st.session_state.scan_process.poll() is None:
-                new_logs = get_scan_logs(st.session_state.get('last_log_id', 0))
-                if new_logs:
-                    for log in new_logs:
-                        if log['level'] == 'PROGRESS':
-                            # Update progress bar
-                            progress_value = int(log['message'])
-                            progress_bar.progress(progress_value / 100, text=f"Processing... {progress_value}%")
-                        else:
-                            # Append to log history
-                            st.session_state.log_history += f"{log['message']}\n"
-                    
-                    st.session_state.last_log_id = new_logs[-1]['id']
-                    log_container.text_area("Live Logs", st.session_state.log_history, height=200, key=f"log_area_{time.time()}")
-                
-                time.sleep(2) # Poll every 2 seconds to avoid overwhelming the DB.
-        
-        # Scan finished, clean up state.
+            new_logs = get_scan_logs(st.session_state.get('last_log_id', 0))
+            if new_logs:
+                st.session_state.last_log_id = new_logs[-1]['id']
+                if 'log_history' not in st.session_state:
+                    st.session_state.log_history = []
+                st.session_state.log_history.extend(new_logs)
+
+            with log_placeholder.container():
+                for log in st.session_state.get('log_history', []):
+                    if log['level'] == 'ERROR':
+                        st.error(f"🚨 {log['message']}", icon="🚨")
+                    elif log['level'] == 'INFO':
+                        st.write(f"ℹ️ {log['message']}")
+                    else: # PROGRESS or other
+                        st.write(f"⏳ {log['message']}")
+            
+            # Trigger a rerun to keep the logs updated automatically.
+            time.sleep(2)
+            st.rerun()
+    elif st.session_state.get('scan_process') and st.session_state.scan_process.poll() is not None:
+        # Scan finished, clean up state on the next rerun.
+        st.toast("Scan complete!", icon="🎉")
+        st.session_state.scan_process = None
+        st.cache_data.clear() # Clear caches to get new suggestion list
+        st.rerun() # Rerun to update the UI and hide the progress monitor.
+
         st.toast("Scan complete!", icon="🎉")
         st.session_state.scan_process = None
         st.cache_data.clear() # Clear caches to get new suggestion list
@@ -488,25 +546,26 @@ def main():
     """
     The main function that runs the Streamlit application.
     """
+    st.set_page_config(layout="wide", page_title="Immich Album Suggester")
+    
+    # Run pre-flight checks first. If they fail, stop execution.
+    if not pre_flight_checks():
+        return
+    
     # Load configuration once at the start
     try:
-        with open('config.yaml', 'r') as f:
+        with open(APP_DIR / 'config.yaml', 'r') as f:
             config = yaml.safe_load(f)
     except FileNotFoundError:
         st.error("FATAL: config.yaml not found. The application cannot start.")
         return
-    
     cfg_ui = config.get('ui', {})
     
-    # Set the page layout and title. This should be the first Streamlit command.
-    st.set_page_config(layout="wide", page_title=cfg_ui.get("page_title", "Album Suggester"))
-    
     # Ensure the database and session state are initialized on first run.
-    init_session_state()
     
     # --- Sidebar Composition ---
     with st.sidebar:
-        # The suggestion list is always rendered.
+
         render_suggestion_list()
         
         st.divider()
@@ -593,8 +652,8 @@ def main():
         render_single_photo_view()
 
 # This makes the script runnable.
+# FIX: Removed duplicate __main__ check.
 if __name__ == "__main__":
     init_db() # Initialize DB before running the main app logic
-    main()
-if __name__ == "__main__":
+    init_session_state() # Initialize session state for the UI
     main()

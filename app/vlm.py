@@ -10,6 +10,10 @@ import requests
 import sys
 from . import immich_api # Note the relative import
 
+class VLMError(Exception):
+    """Custom exception for VLM-related failures."""
+    pass
+
 def get_vlm_analysis(
     api_client: immich_api.immich_python_sdk.ApiClient,
     sample_asset_ids: list,
@@ -32,11 +36,11 @@ def get_vlm_analysis(
             encoded_images.append(base64.b64encode(image_bytes).decode('utf-8'))
 
     if not encoded_images:
-        print("    - [VLM-ERROR] No images could be prepared for analysis.", file=sys.stderr)
-        return None
+        raise VLMError("No images could be prepared for analysis. Check Immich connectivity and asset status.")
 
     cfg = config['vlm']
     # This highly-structured prompt is crucial for getting reliable JSON output.
+
     location_prompt = f"The event took place primarily in '{location_str}'." if location_str else "The event location is unknown."
     prompt = cfg['prompt'].format(
         date_str=date_str,
@@ -55,22 +59,16 @@ def get_vlm_analysis(
     try:
         response = requests.post(cfg['api_url'], json=payload, timeout=cfg['api_timeout_seconds'])
         response.raise_for_status()
+        vlm_data = response.json()
         
-        ### --- UPDATED SECTION (Flexible VLM Response Handling) --- ###
-        
-        # Based on Design Decision 2B (Flexible): Check for core keys only.
-        # We consider the analysis a success if we get at least a title and description.
         required_keys = ['title', 'description']
         if all(key in vlm_data and vlm_data[key] for key in required_keys):
             print(f"    - [VLM] Success. Generated Title: '{vlm_data['title']}'")
             return vlm_data
         else:
-            print(f"    - [VLM-WARN] VLM response was valid JSON but missed core keys ('title', 'description'). Response: {vlm_data}", file=sys.stderr)
-            return None
+            raise VLMError(f"Response missed required keys ('title', 'description'). Got: {vlm_data}")
             
     except requests.exceptions.RequestException as e:
-        print(f"    - [VLM-ERROR] Could not connect to VLM service: {e}", file=sys.stderr)
-        return None
+        raise VLMError(f"Could not connect to VLM service at {cfg['api_url']}: {e}")
     except json.JSONDecodeError:
-        print(f"    - [VLM-ERROR] VLM response was not valid JSON. Response: {response.text}", file=sys.stderr)
-        return None
+        raise VLMError(f"Response was not valid JSON. Response text: {response.text[:200]}...")
