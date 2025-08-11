@@ -15,17 +15,23 @@ import time
 import json
 import math
 from contextlib import contextmanager
+import dotenv
 import yaml
 import sys
 import os
+
 from pathlib import Path
 
 # Use a path relative to the script file for robustness
 APP_DIR = Path(__file__).parent
 DB_PATH = APP_DIR / "data" / "suggestions.db"
 
+# Load environment variables from the .env file.
+dotenv.load_dotenv()
+
 # Ensure the database file's parent directory exists. This will create the `/usr/src/app/data` dir.
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
 
 # --- Section 1: Data & State Management ---
 
@@ -546,11 +552,11 @@ def main():
     The main function that runs the Streamlit application.
     """
     st.set_page_config(layout="wide", page_title="Immich Album Suggester")
-    
+
     # Run pre-flight checks first. If they fail, stop execution.
     if not pre_flight_checks():
         return
-    
+
     # Load configuration once at the start
     try:
         with open(APP_DIR / 'config.yaml', 'r') as f:
@@ -558,10 +564,12 @@ def main():
     except FileNotFoundError:
         st.error("FATAL: config.yaml not found. The application cannot start.")
         return
+
     cfg_ui = config.get('ui', {})
-    
+
     # Ensure the database and session state are initialized on first run.
-    
+    init_session_state()
+
     # --- Sidebar Composition ---
     with st.sidebar:
 
