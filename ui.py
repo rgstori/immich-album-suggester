@@ -22,13 +22,12 @@ from pathlib import Path
 
 # Use a path relative to the script file for robustness
 APP_DIR = Path(__file__).parent
-DB_PATH = APP_DIR / "suggestions.db"
+DB_PATH = APP_DIR / "data" / "suggestions.db"
 
-# Ensure the database file's parent directory exists
+# Ensure the database file's parent directory exists. This will create the `/usr/src/app/data` dir.
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # --- Section 1: Data & State Management ---
-
 
 @contextmanager
 def get_db_connection():
