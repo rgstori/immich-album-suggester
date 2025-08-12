@@ -5,7 +5,7 @@
 # --- Development and Execution Toggles ---
 dev_mode:
   enabled: true
-  sample_size: 2000 # Max assets to fetch in dev mode.
+  sample_size: 20000 # Max assets to fetch in dev mode.
 
 # --- Postgres ---
 # Optional override for the DB schema (otherwise uses DB_SCHEMA env or 'public')
@@ -22,14 +22,16 @@ vlm:
   enabled: true
   api_url: "http://192.168.50.36:11434/api/generate"
   api_timeout_seconds: 300 # Generous timeout for VLM inference.
-  model: "llava"           # The model to use in Ollama.
+  model: "qwen2.5vl:3b"           # The model to use in Ollama.
   context_window: 16384    # The context window size (num_ctx).
   sample_size: 10          # Number of photos to send to the VLM per album.
+  retry_attempts: 3         # Number of times to try the VLM call if it fails.
+  retry_delay_seconds: 5    # How long to wait between retries.
   # The full prompt for the VLM. Using YAML's block scalar for readability.
   prompt: |
     You are an automated photo album assistant. Analyze the provided images and context. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
     CONTEXT: Event Date: '{date_str}'. {location_prompt}
-    JSON STRUCTURE: {"title": "string", "description": "string", "highlights": [int], "cover_photo_index": int}
+    JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A one-paragraph summary of the event, people, and activities", "highlights": [int], "cover_photo_index": int}}
 
 geocoding:
   user_agent: "immich_album_suggester_v2" # User agent for the Nominatim API.
