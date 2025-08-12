@@ -20,7 +20,8 @@ import yaml
 import sys
 import os
 import requests
-
+from app.immich_api import get_api_client, create_immich_album
+from app.immich_db import get_connection as get_immich_db_connection, get_exif_for_asset
 from pathlib import Path
 
 # Use a path relative to the script file for robustness
@@ -287,9 +288,18 @@ def get_thumbnail_url(asset_id: str) -> str:
     Constructs the full, direct URL for an Immich asset thumbnail.
     This is cached as it will never change for a given asset ID.
     """
-    # This assumes the Immich URL is set as an environment variable.
+    # Keep for compatibility, but actual fetch now tries both endpoints in fetch_and_cache_all_thumbnails
     immich_url = os.getenv("IMMICH_URL", "").rstrip('/')
-    return f"{immich_url}/api/asset/thumbnail/{asset_id}"
+    # Normalize to avoid double '/api'
+    base = immich_url[:-4] if immich_url.lower().endswith('/api') else immich_url
+    return f"{base}/api/assets/{asset_id}/thumbnail"
+
+def _build_api_base_from_env() -> str:
+    immich_url = os.getenv("IMMICH_URL", "").strip().rstrip('/')
+    if immich_url.lower().endswith('/api'):
+        immich_url = immich_url[:-4].rstrip('/')
+    return f"{immich_url}/api"
+
 
 @st.cache_data(persist=True, show_spinner=False)
 def fetch_and_cache_all_thumbnails(_suggestion_id: int, asset_ids: list):
@@ -298,38 +308,50 @@ def fetch_and_cache_all_thumbnails(_suggestion_id: int, asset_ids: list):
     The _suggestion_id parameter is a "cache key" - when we switch to a new
     suggestion, this function will re-run.
     
-    This is the core of the performant gallery, decorated with @st.cache_data.
+    This is a pure data-fetching function, safe for caching. It contains no
+    Streamlit UI elements.
     
     Returns:
         A dictionary mapping asset_id -> image_bytes.
     """
-    # This function would be too slow without caching.
-    st.toast(f"Caching {len(asset_ids)} thumbnails for fast browsing...", icon="🖼️")
-    
     # We use a direct requests session for performance.
     api_key = os.getenv("IMMICH_API_KEY")
     headers = {'x-api-key': api_key}
+    api_base = _build_api_base_from_env()
     
     image_cache = {}
     
-    # Display a progress bar while caching.
-    progress_text = "Caching thumbnails... please wait."
-    progress_bar = st.progress(0, text=progress_text)
-    
-    for i, asset_id in enumerate(asset_ids):
+    for asset_id in asset_ids:
         try:
-            url = get_thumbnail_url(asset_id)
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            image_cache[asset_id] = response.content
+            # Try both URL patterns; stop at the first that works
+            candidate_urls = [
+                f"{api_base}/asset/thumbnail/{asset_id}",   # singular
+                f"{api_base}/assets/{asset_id}/thumbnail",  # plural
+            ]
+            content = None
+            last_exc = None
+            for url in candidate_urls:
+                try:
+                    response = requests.get(url, headers=headers, timeout=10)
+                    if response.status_code == 404:
+                        continue
+                    response.raise_for_status()
+                    content = response.content
+                    break
+                except requests.RequestException as e:
+                    last_exc = e
+                    if not (hasattr(e, 'response') and e.response is not None and e.response.status_code == 404):
+                        break
+            if content is None:
+                if last_exc:
+                    raise last_exc
+                else:
+                    raise requests.RequestException("All thumbnail URL variants returned 404.")
+            image_cache[asset_id] = content
         except requests.RequestException:
-            # If a thumbnail fails, store None so we don't retry.
-            image_cache[asset_id] = None
-        
-        # Update the progress bar.
-        progress_bar.progress((i + 1) / len(asset_ids), text=progress_text)
-        
-    progress_bar.empty() # Remove the progress bar when done.
+             # If a thumbnail fails, store None so we don't retry.
+             image_cache[asset_id] = None
+             
     return image_cache
 
 
@@ -393,12 +415,6 @@ def render_scan_controls():
         st.cache_data.clear() # Clear caches to get new suggestion list
         st.rerun() # Rerun to update the UI and hide the progress monitor.
 
-        st.toast("Scan complete!", icon="🎉")
-        st.session_state.scan_process = None
-        st.cache_data.clear() # Clear caches to get new suggestion list
-        st.rerun() # Rerun to update the UI and hide the progress monitor.
-
-
 def render_suggestion_list():
     """Renders the list of clickable suggestion buttons in the sidebar."""
     st.sidebar.subheader("Pending Suggestions")
@@ -443,7 +459,7 @@ def render_weak_asset_selector(weak_assets: list, image_cache: dict):
             with cols[idx]:
                 img_bytes = image_cache.get(asset_id)
                 if img_bytes:
-                    st.image(img_bytes, use_column_width=True)
+                    st.image(img_bytes, use_container_width=True)
                 else:
                     st.error("X") # Display an error if thumbnail failed to load
                 
@@ -499,7 +515,7 @@ def render_album_gallery(title: str, asset_ids: list, cover_id: str, image_cache
                 img_bytes = image_cache.get(asset_id)
                 if img_bytes:
                     # Add a visual indicator for the cover photo.
-                    st.image(img_bytes, use_column_width=True, caption="Cover" if asset_id == cover_id else "")
+                    st.image(img_bytes, use_container_width=True, caption="Cover" if asset_id == cover_id else "")
                 else:
                     st.error("X") # Thumbnail failed to load
                 
@@ -509,7 +525,7 @@ def render_album_gallery(title: str, asset_ids: list, cover_id: str, image_cache
                     st.session_state.selected_asset_id = asset_id
                     st.rerun()
 
-def render_single_photo_view():
+def render_single_photo_view(config: dict):
     """Renders a detailed view for one photo with its EXIF data."""
     asset_id = st.session_state.selected_asset_id
     st.title("Photo Details")
@@ -520,28 +536,24 @@ def render_single_photo_view():
     # Get the full-resolution image URL (different from thumbnail URL)
     immich_url = os.getenv("IMMICH_URL", "").rstrip('/')
     api_key = os.getenv("IMMICH_API_KEY")
-    full_res_url = f"{immich_url}/api/asset/file/{asset_id}"
     
-    st.image(full_res_url, headers={'x-api-key': api_key}, use_column_width=True)
+    # Use the robust base URL builder
+    api_base = _build_api_base_from_env()
+    # Newer Immich versions may use a different file endpoint
+    full_res_url = f"{api_base}/asset/file/{asset_id}"
     
-    # Fetch and display EXIF data
+    st.image(full_res_url, headers={'x-api-key': api_key}, use_container_width=True)
+    
+    # Fetch and display real EXIF data
     st.subheader("EXIF Data")
     with st.spinner("Fetching EXIF data..."):
-        exif_data = {}
-        # In a real implementation, this would connect to the Immich DB
-        # and query the 'exif' table for this asset_id.
-        # For now, we use a placeholder.
-        # exif_data = get_exif_for_asset(asset_id) 
-        exif_data = {
-            "Camera": "Canon EOS R5",
-            "Lens": "RF 24-70mm F2.8L IS USM",
-            "Focal Length": "50mm",
-            "Shutter Speed": "1/200s",
-            "Aperture": "f/2.8",
-            "ISO": 400,
-            "Timestamp": "2025-07-11 14:30:05"
-        }
-        st.json(exif_data)
+        # Call the new database function instead of using a placeholder
+        exif_data = get_exif_for_asset(config, asset_id)
+        
+        if exif_data:
+            st.json(exif_data)
+        else:
+            st.info("No EXIF data available for this asset.")
 
 # --- Section 4: Main Application Layout ---
 # This is the final composition layer. It orchestrates the rendering of all
@@ -647,17 +659,22 @@ def main():
         
         # Pre-cache all thumbnails for this suggestion for a smooth experience.
         all_asset_ids = strong_assets + weak_assets
-        image_cache = fetch_and_cache_all_thumbnails(suggestion_details['id'], all_asset_ids)
+        
+        # Use a spinner to provide UI feedback *outside* the cached function.
+        # This will only be visible on the first load for this suggestion.
+        # On subsequent reruns (like changing pages), it will be instant.
+        with st.spinner("Preparing image gallery... 🖼️"):
+            image_cache = fetch_and_cache_all_thumbnails(suggestion_details['id'], all_asset_ids)
 
         # Render the selectors and galleries
         render_album_gallery("Album Photos (Strong Candidates)", strong_assets, cover_id, image_cache, config)
-        
+                
         if weak_assets:
             st.divider()
             render_weak_asset_selector(weak_assets, image_cache)
             
     elif st.session_state.view_mode == 'photo':
-        render_single_photo_view()
+        render_single_photo_view(config)
 
 # This makes the script runnable.
 # FIX: Removed duplicate __main__ check.
@@ -665,3 +682,6 @@ if __name__ == "__main__":
     init_db() # Initialize DB before running the main app logic
     init_session_state() # Initialize session state for the UI
     main()
+
+
+

@@ -250,3 +250,49 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
     except Exception as e:
         print(f"FATAL: Failed to execute asset query. Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+def get_exif_for_asset(config: dict, asset_id: str) -> dict | None:
+    """
+    Fetches all available EXIF data for a single asset from the database.
+
+    Args:
+        config: The application configuration dictionary.
+        asset_id: The ID of the asset to look up.
+
+    Returns:
+        A dictionary of EXIF data, or None if not found or an error occurs.
+    """
+    conn = None  # Initialize conn to None
+    try:
+        conn = get_connection()
+        schema = _get_schema_name(config)
+        
+        # Resolve the correct table name for EXIF data
+        exif_tbl = _resolve_table(conn, schema, ["asset_exif", "exif"])
+        if not exif_tbl:
+            print(f"WARN: Could not resolve EXIF table in schema '{schema}'.", file=sys.stderr)
+            return None
+
+        # Query for all columns for the given asset ID
+        query = f'SELECT * FROM "{schema}"."{exif_tbl}" WHERE "assetId" = %s'
+        
+        with conn.cursor() as cur:
+            cur.execute(query, (asset_id,))
+            row = cur.fetchone()
+
+        if not row:
+            return None
+
+        # Convert the RealDictRow to a standard dict and remove the assetId
+        exif_data = dict(row)
+        exif_data.pop("assetId", None) # Don't show the ID in the UI display
+        
+        # Filter out keys that have None or empty values for a cleaner display
+        return {k: v for k, v in exif_data.items() if v is not None and v != ''}
+
+    except Exception as e:
+        print(f"ERROR: Failed to fetch EXIF data for asset {asset_id}. Error: {e}", file=sys.stderr)
+        return None
+    finally:
+        if conn:
+            conn.close()
