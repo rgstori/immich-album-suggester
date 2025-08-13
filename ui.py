@@ -437,74 +437,44 @@ def fetch_and_cache_all_thumbnails(_suggestion_id: int, asset_ids: list):
 # that are composed in the final Main Application Layout.
 
 def render_scan_controls():
-    """
-    Renders the UI for starting scans and monitoring their progress.
-    This component is non-blocking and relies on polling the database.
-    """
+    """Renders UI for starting scans and monitoring progress without locking."""
     st.sidebar.subheader("Scan Controls")
 
-    # Disable buttons if a scan is currently running.
-    is_scan_running = bool(st.session_state.get('scan_process')) and st.session_state.scan_process.poll() is None
+    is_scan_running = bool(st.session_state.get('scan_process'))
     
     col1, col2 = st.sidebar.columns(2)
     
-    # [MODIFIED] When starting a scan, first clear the log history from the previous run.
+    # --- FIX: Replaced '...' with the correct keyword arguments ---
     if col1.button("Incremental Scan", use_container_width=True, disabled=is_scan_running):
-        st.session_state.log_history = []
-        start_scan_process(mode='incremental')
+        start_scan_process('incremental')
         st.rerun()
-
-    if col2.button("Full Rescan", use_container_width=True, type="primary", disabled=is_scan_running):
-        st.session_state.log_history = []
-        start_scan_process(mode='full')
-        st.rerun()
-
-    # This container will now display logs from the session_state, making them persistent
-    # across the reruns that happen during a scan.
-    log_container = st.sidebar.container(border=True)
-    with log_container:
-        if st.session_state.get('log_history'):
-            for log in st.session_state.get('log_history', []):
-                if log['level'] == 'ERROR':
-                    st.error(f"🚨 {log['message']}", icon="🚨")
-                elif log['level'] == 'INFO':
-                    st.write(f"ℹ️ {log['message']}")
-                else: # PROGRESS or other
-                    st.write(f"⏳ {log['message']}")
     
-    # This section is the live monitor logic, which runs only during a scan.
+    # --- FIX: Replaced '...' with the correct keyword arguments ---
+    if col2.button("Full Rescan", use_container_width=True, type="primary", disabled=is_scan_running):
+        start_scan_process('full')
+        st.rerun()
+
+    # Display status message if a scan is running
     if is_scan_running:
-        with log_container:
-            # We add a spinner inside the container to show it's actively updating.
-            st.info("Scan in progress...", icon="⏳")
-
-        new_logs = get_scan_logs(st.session_state.get('last_log_id', 0))
-        if new_logs:
-            st.session_state.last_log_id = new_logs[-1]['id']
-            if 'log_history' not in st.session_state:
-                st.session_state.log_history = []
-            st.session_state.log_history.extend(new_logs)
-
-        # Trigger a rerun to keep the logs updated automatically.
-        time.sleep(2)
-        st.rerun()
+        st.sidebar.info("Clustering scan in progress...", icon="⏳")
+    
+    # Display logs (this is now passive and doesn't force reruns)
+    log_container = st.sidebar.container(border=True, height=250) # Added a fixed height for better layout
+    with log_container:
+        # Fetch all logs from the DB on each render. Fast enough for this purpose.
+        with get_db_connection() as conn:
+            # Use ORDER BY id DESC and LIMIT to get the most recent logs first
+            logs = conn.execute("SELECT level, message FROM scan_logs ORDER BY id DESC LIMIT 100").fetchall()
         
-    # [MODIFIED] This block now runs exactly ONCE, right after the scan finishes.
-    # It is the new, robust "signal" to update the UI.
-    elif st.session_state.get('scan_process') and st.session_state.scan_process.poll() is not None:
-        st.toast("Scan complete! Updating list...", icon="🎉")
-        st.session_state.scan_process = None # Clean up the process object
-        st.cache_data.clear() # Invalidate the cache to get the new suggestions
-        st.rerun() # Rerun one final time. On this run, the new suggestions will appear.
-                   # The logs will remain visible because we no longer clear them here.
-            
-    elif st.session_state.get('scan_process') and st.session_state.scan_process.poll() is not None:
-        st.toast("Scan complete!", icon="🎉")
-        st.session_state.scan_process = None
-        # The cache is likely already cleared by the logic above, but clearing again is safe.
-        st.cache_data.clear()
-        st.rerun()
+        if not logs and not is_scan_running:
+            log_container.info("Logs will appear here when a scan is running.")
 
+        # Reverse the list so the most recent log is at the bottom
+        for log in reversed(logs):
+            if log['level'] == 'ERROR':
+                st.error(f"🚨 {log['message']}", icon="🚨")
+            else: # INFO, PROGRESS, etc.
+                st.write(f"⏳ {log['message']}")
 
 def render_suggestion_list():
     """
@@ -800,27 +770,31 @@ def main():
     init_db()
     init_session_state()
 
-    # Centralized state polling and update logic. This section now handles ALL
-    # background process monitoring to ensure the UI is always responsive.
+    # --- [NEW] UNIFIED, NON-BLOCKING PROCESS MONITOR ---
+    # This block runs on EVERY interaction, ensuring the UI state is always
+    # eventually consistent without locking the interface.
 
-    # 1. Check for finished enrichment processes and update the UI immediately.
-    # This loop cleans up completed processes.
-    for s_id, process in list(st.session_state.enrich_processes.items()):
-        if process.poll() is not None:  # Process has finished
-            del st.session_state.enrich_processes[s_id]
-            st.cache_data.clear()  # Force UI to get fresh data
-            st.toast(f"Enrichment for suggestion {s_id} complete!", icon="🎉")
-            # Rerun immediately to show the final state without waiting for the poll timer.
-            st.rerun()
+    # 1. Check the main clustering scan process
+    scan_proc = st.session_state.get('scan_process')
+    if scan_proc and scan_proc.poll() is not None:
+        st.toast("Scan complete! Updating list...", icon="🎉")
+        st.session_state.scan_process = None # Clean up
+        st.cache_data.clear()
+        st.rerun() # Perform a single, final rerun
 
-    # 2. Check if any enrichment process is STILL running. If so, start polling.
-    # This is the new, crucial part that keeps the UI "live".
-    is_any_enrichment_running = any(
-        p.poll() is None for p in st.session_state.enrich_processes.values()
-    )
-    if is_any_enrichment_running:
-        time.sleep(2)  # Wait a couple of seconds to avoid frantic updates.
-        st.rerun()   # Force a rerun to re-check the process status.
+    # 2. Check all enrichment processes
+    for s_id, enrich_proc in list(st.session_state.enrich_processes.items()):
+        if enrich_proc.poll() is not None:
+            # Process has finished, update its status from 'enriching' if needed
+            with get_db_connection() as conn:
+                # If the backend script failed to update status, mark as failed.
+                conn.execute("UPDATE suggestions SET status = 'enrichment_failed' WHERE id = ? AND status = 'enriching'", (s_id,))
+                conn.commit()
+            
+            del st.session_state.enrich_processes[s_id] # Clean up
+            st.toast(f"Enrichment for suggestion {s_id} is complete.", icon="✅")
+            st.cache_data.clear()
+            st.rerun() # Perform a single, final rerun
 
     # --- Sidebar Composition ---
     with st.sidebar:

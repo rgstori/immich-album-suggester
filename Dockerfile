@@ -6,8 +6,8 @@ WORKDIR /usr/src/app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create the data directory for SQLite database
-RUN mkdir -p /usr/src/app/data
+# Copy the data directory which contains the SQLite DB and geocoding data
+COPY ./data ./data
 
 # Copy the configuration and the application code
 COPY config.yaml ./

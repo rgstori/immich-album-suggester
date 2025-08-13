@@ -36,9 +36,19 @@ def get_api_client(config: dict) -> immich_python_sdk.ApiClient:
     api_key = immich_cfg.get('api_key') or os.getenv('IMMICH_API_KEY')
     if not host or not api_key:
         raise ValueError("Immich API configuration is missing. Set immich.url and immich.api_key in config.yaml or provide IMMICH_URL and IMMICH_API_KEY environment variables.")
-    # Important: SDK should get the root (no '/api') to avoid double '/api'
-    configuration = immich_python_sdk.Configuration(host=_normalize_host(host))
+
+    # --- THE FIX ---
+    # The SDK's `host` parameter expects the full API base URL, including '/api'.
+    # Our previous implementation was stripping '/api', causing the 404 "Not Found" error.
+    # We will now use _build_api_base to ensure '/api' is correctly included.
+    api_base_url = _build_api_base(host)
+    
+    # Add a debug print to confirm the URL is correct in the logs.
+    print(f"  - [API-DEBUG] Initializing SDK client with host: {api_base_url}")
+
+    configuration = immich_python_sdk.Configuration(host=api_base_url)
     configuration.api_key['api_key'] = api_key
+    
     return immich_python_sdk.ApiClient(configuration)
 
 def download_and_convert_image(api_client: immich_python_sdk.ApiClient, asset_id: str, config: dict) -> bytes | None:
@@ -115,8 +125,8 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
     """
     print(f"  - [API] Attempting to create album: '{title}'")
     try:
-        albums_api = immich_python_sdk.AlbumApi(api_client)
-        asset_api = immich_python_sdk.AssetApi(api_client)
+        albums_api = immich_python_sdk.AlbumsApi(api_client)
+        asset_api = immich_python_sdk.AssetsApi(api_client)
         
         # 1. Create the album
         create_dto = immich_python_sdk.CreateAlbumDto(album_name=title)
@@ -124,14 +134,22 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
         print(f"    - Album '{title}' created with ID: {album.id}")
         
         # 2. Add assets to the album
-        add_dto = immich_python_sdk.AddAssetsDto(asset_ids=asset_ids)
-        albums_api.add_assets_to_album(id=album.id, add_assets_dto=add_dto)
-        print(f"    - Added {len(asset_ids)} assets.")
+        # The 'add_assets_to_album' endpoint expects a payload with an 'ids' key.
+        # 'BulkIdsDto' creates this payload, while 'AddAssetsDto' is likely for another endpoint.
         
+        # First, ensure asset_ids is not empty to avoid a potentially bad request.
+        if not asset_ids:
+            print("    - [API-WARN] No assets to add to the album. Skipping asset addition.")
+        else:
+            add_dto = immich_python_sdk.BulkIdsDto(ids=asset_ids) 
+            # The second argument to the function call is the DTO itself.
+            albums_api.add_assets_to_album(id=album.id, bulk_ids_dto=add_dto)
+            print(f"    - Added {len(asset_ids)} assets.")
+
         # 3. Set the cover photo
         if cover_asset_id and cover_asset_id in asset_ids:
             update_dto = immich_python_sdk.UpdateAlbumDto(album_thumbnail_id=cover_asset_id)
-            albums_api.update_album(id=album.id, update_album_dto=update_dto)
+            albums_api.update_album_info(id=album.id, update_album_dto=update_dto)
             print(f"    - Set asset {cover_asset_id} as album cover.")
             
         # 4. Favorite the highlight photos
@@ -145,5 +163,7 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
         return True
     
     except immich_python_sdk.ApiException as e:
+        # Provide more detail in the error log
         print(f"  - [API-ERROR] Failed to create album '{title}'. Reason: {e.reason}", file=sys.stderr)
+        print(f"  - [API-ERROR-BODY] Response Body: {e.body}", file=sys.stderr) # This is crucial for debugging
         return False

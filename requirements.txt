@@ -8,6 +8,6 @@ immich-python-sdk
 networkx
 requests
 Pillow
-geopy
+reverse-geocoder
 streamlit
 PyYAML

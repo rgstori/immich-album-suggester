@@ -81,7 +81,7 @@ def store_initial_suggestion(candidate: dict, config: dict) -> int:
     """Stores a candidate with default info, returning the new suggestion's ID."""
     date_str = candidate['min_date'].strftime('%B %Y')
     all_asset_ids = candidate['strong_asset_ids'] + candidate['weak_asset_ids']
-    location_str = geocoding.get_primary_location(candidate['gps_coords'], config)
+    location_str = geocoding.get_primary_location(candidate['gps_coords'])
     event_start_datetime = candidate['min_date'].to_pydatetime()
 
     with sqlite3.connect(DB_PATH) as conn:

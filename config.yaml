@@ -5,7 +5,7 @@
 # --- Development and Execution Toggles ---
 dev_mode:
   enabled: true
-  sample_size: 20000 # Max assets to fetch in dev mode.
+  sample_size: 100000 # Max assets to fetch in dev mode.
 
 # --- Postgres ---
 # Optional override for the DB schema (otherwise uses DB_SCHEMA env or 'public')
@@ -33,23 +33,18 @@ vlm:
     CONTEXT: Event Date: '{date_str}'. {location_prompt}
     JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A one-paragraph summary of the event, people, and activities", "highlights": [int], "cover_photo_index": int}}
 
-geocoding:
-  user_agent: "immich_album_suggester_v2" # User agent for the Nominatim API.
-  api_timeout_seconds: 10
-  sample_size: 5 # Max GPS points to check per album for location lookup.
-
 # --- Clustering Algorithm Tuning ---
 clustering:
   # Stage 1: Fine-tunes the creation of small, dense "eventlets".
   stage1:
     time_window_seconds: 21600   # 6 hours. Max time gap within an eventlet.
-    space_window_degrees: 0.005  # ~500 meters. Max distance gap within an eventlet.
+    space_window_degrees: 0.010  # ~1000 meters. Max distance gap within an eventlet.
     min_cluster_size: 5        # Min photos to be considered an eventlet.
 
   # Stage 2: Fine-tunes how eventlets are merged into final albums.
   stage2:
     merge_similarity_threshold: 0.15 # Max cosine distance for embeddings. Lower is more similar.
-    merge_time_window_days: 3        # Max time gap between eventlets to consider merging.
+    merge_time_window_days: 7        # Max time gap between eventlets to consider merging.
     min_eventlets_for_album: 2       # An album must consist of at least 2 merged eventlets.
 
 # --- Fallback Text Templates ---
@@ -64,5 +59,5 @@ ui:
   page_title: "Immich Album Suggester"
   welcome_header: "Welcome to the Immich Album Suggester"
   welcome_info: "Select a pending suggestion from the sidebar to review it, or start a new scan."
-  thumbnails_per_page: 30
+  thumbnails_per_page: 50
   gallery_columns: 6
