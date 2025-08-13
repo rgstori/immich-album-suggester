@@ -16,6 +16,9 @@ import json
 import math
 import logging
 from contextlib import contextmanager
+from functools import lru_cache
+from collections import OrderedDict
+import threading
 import dotenv
 import yaml
 import sys
@@ -31,6 +34,65 @@ from PIL import Image, ImageOps
 # Configure logging to avoid exposing sensitive data
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# LRU Cache for images with size limit
+class ImageLRUCache:
+    def __init__(self, max_size_mb=100):
+        self.max_size_bytes = max_size_mb * 1024 * 1024
+        self.cache = OrderedDict()
+        self.size_bytes = 0
+        self.lock = threading.Lock()
+    
+    def get(self, key):
+        with self.lock:
+            if key in self.cache:
+                # Move to end (most recently used)
+                self.cache.move_to_end(key)
+                return self.cache[key]
+            return None
+    
+    def put(self, key, value):
+        with self.lock:
+            if key in self.cache:
+                # Update existing - remove old size, add new
+                old_size = len(self.cache[key]) if self.cache[key] else 0
+                self.size_bytes -= old_size
+            
+            if value is None:
+                # Store None values without size impact
+                self.cache[key] = None
+                self.cache.move_to_end(key)
+                return
+            
+            value_size = len(value)
+            
+            # Evict items if necessary
+            while self.size_bytes + value_size > self.max_size_bytes and self.cache:
+                oldest_key, oldest_value = self.cache.popitem(last=False)
+                if oldest_value:
+                    self.size_bytes -= len(oldest_value)
+            
+            # Add new item
+            self.cache[key] = value
+            self.size_bytes += value_size
+            self.cache.move_to_end(key)
+    
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+            self.size_bytes = 0
+    
+    def clear_suggestion(self, suggestion_id):
+        """Clear all cached images for a specific suggestion"""
+        with self.lock:
+            keys_to_remove = [k for k in self.cache.keys() if k.startswith(f"{suggestion_id}_")]
+            for key in keys_to_remove:
+                value = self.cache.pop(key, None)
+                if value:
+                    self.size_bytes -= len(value)
+
+# Global image cache instance
+image_cache = ImageLRUCache(max_size_mb=50)  # 50MB limit
 
 # Use a path relative to the script file for robustness
 APP_DIR = Path(__file__).parent
@@ -201,8 +263,11 @@ def update_suggestion_status(suggestion_id: int, status: str):
         cursor = conn.cursor()
         cursor.execute("UPDATE suggestions SET status = ? WHERE id = ?", (status, suggestion_id))
         conn.commit()
-    # Invalidate caches to force the UI to get fresh data
-    st.cache_data.clear()
+    # Selective cache invalidation - clear only this suggestion's images
+    image_cache.clear_suggestion(suggestion_id)
+    # Clear Streamlit's data cache for fresh suggestion list
+    get_pending_suggestions.clear()
+    get_suggestion_details.clear()
 
 def delete_suggestion(suggestion_id: int):
     """Permanently deletes a single suggestion from the database."""
@@ -210,7 +275,10 @@ def delete_suggestion(suggestion_id: int):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM suggestions WHERE id = ?", (suggestion_id,))
         conn.commit()
-    st.cache_data.clear()
+    # Selective cache invalidation
+    image_cache.clear_suggestion(suggestion_id)
+    get_pending_suggestions.clear()
+    get_suggestion_details.clear()
 
 def clear_all_pending_suggestions():
     """Deletes all suggestions with 'pending' status from the database."""
@@ -218,7 +286,10 @@ def clear_all_pending_suggestions():
         cursor = conn.cursor()
         cursor.execute("DELETE FROM suggestions WHERE status IN ('pending', 'pending_vlm')")
         conn.commit()
-    st.cache_data.clear()
+    # Clear all caches when doing bulk operations
+    image_cache.clear()
+    get_pending_suggestions.clear()
+    get_suggestion_details.clear()
 
 def clear_scan_logs():
     """Clears the scan_logs table, typically before starting a new scan."""
@@ -288,7 +359,9 @@ def clear_all_pending_suggestions():
     # Clear session state related to bulk selection
     if 'suggestions_to_enrich' in st.session_state:
         st.session_state.suggestions_to_enrich.clear()
-    st.cache_data.clear()
+    # Clear all caches when clearing bulk selection
+    get_pending_suggestions.clear()
+    get_suggestion_details.clear()
 
 def start_enrichment_process(suggestion_id: int):
     """Kicks off the backend enrichment script for a single suggestion ID."""
@@ -307,7 +380,8 @@ def start_enrichment_process(suggestion_id: int):
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         st.session_state.enrich_processes[suggestion_id] = process
-        st.cache_data.clear() # Clear cache to update status in UI
+        # Selective cache clearing for enrichment start
+        get_pending_suggestions.clear()
         # Speed up refresh when enrichment is running
         st.session_state.refresh_interval = 2
     except Exception as e:
@@ -364,8 +438,8 @@ def start_scan_process(mode: str):
         # Speed up refresh interval when scan is running
         st.session_state.refresh_interval = 2
         
-        # Invalidate suggestion list cache to prepare for new results
-        st.cache_data.clear()
+        # Clear suggestion list cache to prepare for new results
+        get_pending_suggestions.clear()
     except Exception as e:
         logger.error(f"Failed to start scan process: {e}")
         st.error(f"Failed to start scan process")
@@ -426,35 +500,38 @@ def _build_api_base_from_env() -> str:
     return f"{immich_url}/api"
 
 
-@st.cache_data(persist=True, show_spinner=False)
-def fetch_and_cache_all_thumbnails(_suggestion_id: int, asset_ids: list):
+def fetch_and_cache_all_thumbnails(suggestion_id: int, asset_ids: list):
     """
-    Fetches all thumbnails for a given list of asset IDs and caches the results.
-    The _suggestion_id parameter is a "cache key" - when we switch to a new
-    suggestion, this function will re-run.
-    
-    This is a pure data-fetching function, safe for caching. It contains no
-    Streamlit UI elements.
+    Fetches all thumbnails for a given list of asset IDs using the LRU cache.
     
     Returns:
         A dictionary mapping asset_id -> image_bytes.
     """
-    # We use a direct requests session for performance.
     api_key = os.getenv("IMMICH_API_KEY")
     headers = {'x-api-key': api_key}
     api_base = _build_api_base_from_env()
     
-    image_cache = {}
+    result_cache = {}
     
     for asset_id in asset_ids:
+        # Create cache key with suggestion context
+        cache_key = f"{suggestion_id}_{asset_id}"
+        
+        # Check if already cached
+        cached_content = image_cache.get(cache_key)
+        if cached_content is not None:
+            result_cache[asset_id] = cached_content
+            continue
+        
+        # Fetch from API
         try:
-            # Try both URL patterns; stop at the first that works
             candidate_urls = [
                 f"{api_base}/asset/thumbnail/{asset_id}",   # singular
                 f"{api_base}/assets/{asset_id}/thumbnail",  # plural
             ]
             content = None
             last_exc = None
+            
             for url in candidate_urls:
                 try:
                     response = requests.get(url, headers=headers, timeout=10)
@@ -467,17 +544,24 @@ def fetch_and_cache_all_thumbnails(_suggestion_id: int, asset_ids: list):
                     last_exc = e
                     if not (hasattr(e, 'response') and e.response is not None and e.response.status_code == 404):
                         break
+            
             if content is None:
                 if last_exc:
-                    raise last_exc
+                    logger.warning(f"Failed to fetch thumbnail for asset {asset_id}: {last_exc}")
                 else:
-                    raise requests.RequestException("All thumbnail URL variants returned 404.")
-            image_cache[asset_id] = content
-        except requests.RequestException:
-             # If a thumbnail fails, store None so we don't retry.
-             image_cache[asset_id] = None
+                    logger.warning(f"All thumbnail URL variants returned 404 for asset {asset_id}")
+                content = None  # Store None to avoid retries
+            
+            # Cache the result (including None values)
+            image_cache.put(cache_key, content)
+            result_cache[asset_id] = content
+            
+        except Exception as e:
+            logger.error(f"Unexpected error fetching thumbnail for asset {asset_id}: {e}")
+            image_cache.put(cache_key, None)
+            result_cache[asset_id] = None
              
-    return image_cache
+    return result_cache
 
 
 # --- Section 3: UI Component Rendering ---
@@ -671,7 +755,13 @@ def render_weak_asset_selector(weak_assets: list, image_cache: dict):
                 if img_bytes:
                     st.image(img_bytes, use_container_width=True)
                 else:
-                    st.error("X") # Display an error if thumbnail failed to load
+                    with st.container():
+                        st.error("🖼️ Thumbnail failed to load", icon="⚠️")
+                        if st.button("Retry", key=f"retry_weak_{asset_id}", size="small"):
+                            # Clear cache for this asset and retry
+                            cache_key = f"{st.session_state.selected_suggestion_id}_{asset_id}"
+                            image_cache.put(cache_key, None)  # Remove from cache
+                            st.rerun()
                 
                 # The state of each checkbox is tied to the asset's presence in the set.
                 is_included = asset_id in st.session_state.included_weak_assets
@@ -733,7 +823,13 @@ def render_album_gallery(title: str, asset_ids: list, cover_id: str, image_cache
                     # Add a visual indicator for the cover photo.
                     st.image(img_bytes, use_container_width=True, caption="Cover" if asset_id == cover_id else "")
                 else:
-                    st.error("X") 
+                    with st.container():
+                        st.error("🖼️ Thumbnail unavailable", icon="⚠️")
+                        if st.button("Retry", key=f"retry_main_{asset_id}", size="small"):
+                            # Clear cache for this asset and retry
+                            cache_key = f"{st.session_state.selected_suggestion_id}_{asset_id}"
+                            image_cache.put(cache_key, None)  # Remove from cache
+                            st.rerun() 
                 
                 # Button to switch to single photo view.
                 if st.button("Info", key=f"info_{asset_id}", use_container_width=True):
@@ -840,8 +936,8 @@ def main():
     # Auto-refresh if enough time has passed
     if time_since_refresh >= st.session_state.refresh_interval:
         st.session_state.last_refresh_time = current_time
-        # Clear cache to get fresh data and trigger rerun
-        st.cache_data.clear()
+        # Clear suggestion cache to get fresh data and trigger rerun
+        get_pending_suggestions.clear()
         st.rerun()
 
     # 1. Check the main clustering scan process
@@ -850,7 +946,8 @@ def main():
         st.toast("Scan complete! Updating list...", icon="🎉")
         st.session_state.scan_process = None # Clean up
         st.session_state.refresh_interval = 10  # Reset to slower refresh
-        st.cache_data.clear()
+        # Clear suggestion list for new scan results
+        get_pending_suggestions.clear()
         st.rerun() # Perform a single, final rerun
 
     # 2. Check all enrichment processes
@@ -870,7 +967,9 @@ def main():
             if not st.session_state.enrich_processes:
                 st.session_state.refresh_interval = 10
                 
-            st.cache_data.clear()
+            # Selective cache clearing for completed enrichment
+            get_pending_suggestions.clear()
+            get_suggestion_details.clear()
             st.rerun() # Perform a single, final rerun
 
     # --- Sidebar Composition ---
@@ -887,7 +986,9 @@ def main():
 
         # Add a cache clearing button for debugging and updates.
         if st.button("Clear App Cache"):
-            st.cache_data.clear()
+            image_cache.clear()
+            get_pending_suggestions.clear()
+            get_suggestion_details.clear()
             st.toast("Application caches cleared.", icon="🧹")
             st.rerun()
 
@@ -950,17 +1051,16 @@ def main():
         # Pre-cache all thumbnails for this suggestion for a smooth experience.
         all_asset_ids = strong_assets + weak_assets
         
-        # Use a spinner to provide UI feedback *outside* the cached function.
-        # This will only be visible on the first load for this suggestion.
-        # On subsequent reruns (like changing pages), it will be instant.
+        # Use a spinner to provide UI feedback.
+        # Fetch thumbnails using LRU cache for better memory management
         with st.spinner("Preparing image gallery... 🖼️"):
-            image_cache = fetch_and_cache_all_thumbnails(suggestion_details['id'], all_asset_ids)
+            thumbnail_cache = fetch_and_cache_all_thumbnails(suggestion_details['id'], all_asset_ids)
 
-        render_album_gallery("Core Album Photos", strong_assets, cover_id, image_cache, config)
+        render_album_gallery("Core Album Photos", strong_assets, cover_id, thumbnail_cache, config)
                 
         if weak_assets:
             st.divider()
-            render_weak_asset_selector(weak_assets, image_cache)
+            render_weak_asset_selector(weak_assets, thumbnail_cache)
             
     elif st.session_state.view_mode == 'photo':
         render_single_photo_view(config)

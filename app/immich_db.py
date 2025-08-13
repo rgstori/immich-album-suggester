@@ -225,30 +225,31 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
     print(f"  - [DB] Applying filters: {' AND '.join(filters)}")
 
     try:
-        # Using cursor instead of pandas read_sql_query to avoid the warning
-        cursor = conn.cursor()
+        # Using cursor with context manager to ensure proper cleanup
+        with conn.cursor() as cursor:
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
 
-        if params:
-            cursor.execute(query, params)
-        else:
-            cursor.execute(query)
-
-        # Fetch all results
-        rows = cursor.fetchall()
-        cursor.close()
+            # Fetch all results
+            rows = cursor.fetchall()
 
         if not rows:
-            print("  - [DB] No new assets found to process.")
+            logger.info("No new assets found to process.")
             return pd.DataFrame()
 
         # Convert to DataFrame
         df = pd.DataFrame(rows)
-        print(f"  - [DB] Successfully fetched {len(df)} assets.")
+        logger.info(f"Successfully fetched {len(df)} assets.")
         return df
 
     except Exception as e:
-        print(f"FATAL: Failed to execute asset query. Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        logger.error(f"Failed to execute asset query. Error: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 def get_exif_for_asset(config: dict, asset_id: str) -> dict | None:
     """
