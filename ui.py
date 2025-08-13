@@ -14,6 +14,7 @@ import pandas as pd
 import time
 import json
 import math
+import logging
 from contextlib import contextmanager
 import dotenv
 import yaml
@@ -26,6 +27,10 @@ from pathlib import Path
 import pandas as pd
 from io import BytesIO
 from PIL import Image, ImageOps
+
+# Configure logging to avoid exposing sensitive data
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Use a path relative to the script file for robustness
 APP_DIR = Path(__file__).parent
@@ -54,11 +59,25 @@ def get_db_connection():
 # [NEW] Helper function for safe, idempotent schema migrations.
 def _add_column_if_not_exists(cursor, table_name, column_name, column_type):
     """Checks if a column exists in a table and adds it if it does not."""
+    # Whitelist of allowed tables and columns for security
+    ALLOWED_TABLES = {'suggestions', 'scan_logs'}
+    ALLOWED_COLUMNS = {'event_start_date', 'location', 'status', 'created_at', 'vlm_title', 
+                       'vlm_description', 'strong_asset_ids_json', 'weak_asset_ids_json', 
+                       'cover_asset_id', 'timestamp', 'level', 'message'}
+    
+    if table_name not in ALLOWED_TABLES:
+        raise ValueError(f"Table '{table_name}' is not in the allowed list")
+    if column_name not in ALLOWED_COLUMNS:
+        raise ValueError(f"Column '{column_name}' is not in the allowed list")
+    
+    # Use parameterized query for PRAGMA (SQLite doesn't support ? for table names in PRAGMA)
+    # but since we've whitelisted, the f-string is now safe
     cursor.execute(f"PRAGMA table_info({table_name})")
     columns = [row['name'] for row in cursor.fetchall()]
     if column_name not in columns:
+        # Safe to use f-string after whitelist validation
         cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
-        print(f"Added column '{column_name}' to table '{table_name}'.")
+        logger.info(f"Added column '{column_name}' to table '{table_name}'.")
 
 # [MODIFIED] init_db now includes a one-time, automatic migration.
 def init_db():
@@ -129,6 +148,12 @@ def init_session_state():
     # [NEW] State for tracking multiple enrichment processes
     if "enrich_processes" not in st.session_state:
         st.session_state.enrich_processes = {} # Maps suggestion_id -> subprocess
+    
+    # [NEW] State for auto-refresh polling
+    if "last_refresh_time" not in st.session_state:
+        st.session_state.last_refresh_time = time.time()
+    if "refresh_interval" not in st.session_state:
+        st.session_state.refresh_interval = 10  # Default 10 seconds, will adjust dynamically
 
 
 # [MODIFIED] Now fetches all data required for the new rich display and sorting.
@@ -267,15 +292,27 @@ def clear_all_pending_suggestions():
 
 def start_enrichment_process(suggestion_id: int):
     """Kicks off the backend enrichment script for a single suggestion ID."""
+    # Validate suggestion_id is an integer to prevent injection
+    if not isinstance(suggestion_id, int) or suggestion_id <= 0:
+        logger.error(f"Invalid suggestion_id type: {type(suggestion_id)}")
+        st.error("Invalid suggestion ID")
+        return
+    
     if st.session_state.enrich_processes.get(suggestion_id) and st.session_state.enrich_processes[suggestion_id].poll() is None:
         st.toast(f"Enrichment for suggestion {suggestion_id} is already running.", icon="⏳")
         return
 
     st.toast(f"Starting VLM enrichment for suggestion {suggestion_id}...", icon="✨")
     command = [sys.executable, "-m", "app.main", f"--enrich-id={suggestion_id}"]
-    process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
-    st.session_state.enrich_processes[suggestion_id] = process
-    st.cache_data.clear() # Clear cache to update status in UI
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        st.session_state.enrich_processes[suggestion_id] = process
+        st.cache_data.clear() # Clear cache to update status in UI
+        # Speed up refresh when enrichment is running
+        st.session_state.refresh_interval = 2
+    except Exception as e:
+        logger.error(f"Failed to start enrichment process: {e}")
+        st.error(f"Failed to start enrichment process")
 
 def _correct_image_orientation(image_bytes: bytes) -> bytes:
     """
@@ -313,13 +350,25 @@ def start_scan_process(mode: str):
     # We run the script in a separate process. The UI is now free.
     # We pass the full path to the python executable that streamlit is using
     # to ensure it runs with the same environment and dependencies.
+    # Validate mode to prevent injection
+    if mode not in ['incremental', 'full']:
+        logger.error(f"Invalid scan mode: {mode}")
+        st.error("Invalid scan mode")
+        return
+    
     command = [sys.executable, "-m", "app.main", f"--mode={mode}"]
-    process = subprocess.Popen(command, stdout=sys.stdout, stderr=sys.stderr)
-    st.session_state.scan_process = process
-    st.session_state.last_log_id = 0 # Reset log viewer
-
-    # Invalidate suggestion list cache to prepare for new results
-    st.cache_data.clear()
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        st.session_state.scan_process = process
+        st.session_state.last_log_id = 0 # Reset log viewer
+        # Speed up refresh interval when scan is running
+        st.session_state.refresh_interval = 2
+        
+        # Invalidate suggestion list cache to prepare for new results
+        st.cache_data.clear()
+    except Exception as e:
+        logger.error(f"Failed to start scan process: {e}")
+        st.error(f"Failed to start scan process")
 
 def trigger_album_creation(suggestion: dict, included_weak_assets: set):
     """
@@ -770,15 +819,37 @@ def main():
     init_db()
     init_session_state()
 
-    # --- [NEW] UNIFIED, NON-BLOCKING PROCESS MONITOR ---
+    # --- [NEW] UNIFIED, NON-BLOCKING PROCESS MONITOR WITH SMART POLLING ---
     # This block runs on EVERY interaction, ensuring the UI state is always
     # eventually consistent without locking the interface.
+
+    # Smart polling: check if we need to auto-refresh
+    current_time = time.time()
+    time_since_refresh = current_time - st.session_state.last_refresh_time
+    
+    # Determine if any processes are running to adjust refresh interval
+    scan_running = bool(st.session_state.get('scan_process') and st.session_state.scan_process.poll() is None)
+    enrichment_running = any(proc.poll() is None for proc in st.session_state.enrich_processes.values())
+    
+    # Adjust refresh interval based on activity
+    if scan_running or enrichment_running:
+        st.session_state.refresh_interval = 2  # Fast refresh when processes running
+    else:
+        st.session_state.refresh_interval = 10  # Slower refresh when idle
+    
+    # Auto-refresh if enough time has passed
+    if time_since_refresh >= st.session_state.refresh_interval:
+        st.session_state.last_refresh_time = current_time
+        # Clear cache to get fresh data and trigger rerun
+        st.cache_data.clear()
+        st.rerun()
 
     # 1. Check the main clustering scan process
     scan_proc = st.session_state.get('scan_process')
     if scan_proc and scan_proc.poll() is not None:
         st.toast("Scan complete! Updating list...", icon="🎉")
         st.session_state.scan_process = None # Clean up
+        st.session_state.refresh_interval = 10  # Reset to slower refresh
         st.cache_data.clear()
         st.rerun() # Perform a single, final rerun
 
@@ -787,12 +858,18 @@ def main():
         if enrich_proc.poll() is not None:
             # Process has finished, update its status from 'enriching' if needed
             with get_db_connection() as conn:
+                cursor = conn.cursor()
                 # If the backend script failed to update status, mark as failed.
-                conn.execute("UPDATE suggestions SET status = 'enrichment_failed' WHERE id = ? AND status = 'enriching'", (s_id,))
+                cursor.execute("UPDATE suggestions SET status = 'enrichment_failed' WHERE id = ? AND status = 'enriching'", (s_id,))
                 conn.commit()
             
             del st.session_state.enrich_processes[s_id] # Clean up
             st.toast(f"Enrichment for suggestion {s_id} is complete.", icon="✅")
+            
+            # If no more enrichment processes, reset refresh interval
+            if not st.session_state.enrich_processes:
+                st.session_state.refresh_interval = 10
+                
             st.cache_data.clear()
             st.rerun() # Perform a single, final rerun
 

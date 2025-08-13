@@ -17,6 +17,11 @@ import os
 from pathlib import Path
 import traceback
 import pandas as pd
+import logging
+
+# Configure logging to avoid exposing sensitive data
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # Import our application modules using relative paths
 

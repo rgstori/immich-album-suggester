@@ -9,7 +9,12 @@ import os
 import sys
 import pandas as pd
 import psycopg2
+import logging
 from psycopg2.extras import RealDictCursor
+
+# Configure logging to avoid exposing sensitive data
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def _get_schema_name(config: dict | None) -> str:
@@ -32,14 +37,8 @@ def get_connection():
     using credentials from environment variables.
     """
     try:
-        # --- DEBUGGING PRINT ---
-        # This will show the exact credentials being used in the logs.
-        print("  - [DB-DEBUG] Attempting to connect with the following parameters:")
-        print(f"    - Host: {os.getenv('DB_HOSTNAME')}")
-        print(f"    - Port: {os.getenv('DB_PORT')}")
-        print(f"    - Database: {os.getenv('POSTGRES_DB')}")
-        print(f"    - User: {os.getenv('POSTGRES_USER')}")
-        # We don't print the password for security reasons.
+        # Log connection attempt without sensitive data
+        logger.info("Attempting database connection")
 
         conn = psycopg2.connect(
             dbname=os.getenv("POSTGRES_DB"),
@@ -270,10 +269,16 @@ def get_exif_for_asset(config: dict, asset_id: str) -> dict | None:
         # Resolve the correct table name for EXIF data
         exif_tbl = _resolve_table(conn, schema, ["asset_exif", "exif"])
         if not exif_tbl:
-            print(f"WARN: Could not resolve EXIF table in schema '{schema}'.", file=sys.stderr)
+            logger.warning(f"Could not resolve EXIF table in schema '{schema}'")
             return None
 
-        # Query for all columns for the given asset ID
+        # Whitelist allowed schemas for security
+        ALLOWED_SCHEMAS = {'public', 'immich'}
+        if schema not in ALLOWED_SCHEMAS:
+            logger.error(f"Schema '{schema}' not in allowed list")
+            return None
+        
+        # Query for all columns for the given asset ID (safe after schema validation)
         query = f'SELECT * FROM "{schema}"."{exif_tbl}" WHERE "assetId" = %s'
         
         with conn.cursor() as cur:
@@ -291,7 +296,7 @@ def get_exif_for_asset(config: dict, asset_id: str) -> dict | None:
         return {k: v for k, v in exif_data.items() if v is not None and v != ''}
 
     except Exception as e:
-        print(f"ERROR: Failed to fetch EXIF data for asset {asset_id}. Error: {e}", file=sys.stderr)
+        logger.error(f"Failed to fetch EXIF data for asset. Error: {e}")
         return None
     finally:
         if conn:

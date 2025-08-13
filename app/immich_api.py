@@ -9,6 +9,11 @@ from PIL import Image
 from io import BytesIO
 import os
 import sys
+import logging
+
+# Configure logging to avoid exposing sensitive data
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 def _normalize_host(host: str) -> str:
     """
@@ -43,23 +48,14 @@ def get_api_client(config: dict) -> immich_python_sdk.ApiClient:
     # We will now use _build_api_base to ensure '/api' is correctly included.
     api_base_url = _build_api_base(host)
     
-    # Add a debug print to confirm the URL is correct in the logs.
-    print(f"  - [API-DEBUG] Initializing SDK client with host: {api_base_url}")
+    # Log initialization without exposing sensitive data
+    logger.info("Initializing SDK client")
 
     configuration = immich_python_sdk.Configuration(host=api_base_url)
     configuration.api_key['api_key'] = api_key
     
     return immich_python_sdk.ApiClient(configuration)
 
-def download_and_convert_image(api_client: immich_python_sdk.ApiClient, asset_id: str, config: dict) -> bytes | None:
-
-    host = immich_cfg.get('url') or os.getenv('IMMICH_URL')
-    api_key = immich_cfg.get('api_key') or os.getenv('IMMICH_API_KEY')
-    if not host or not api_key:
-        raise ValueError("Immich API configuration is missing. Set immich.url and immich.api_key in config.yaml or provide IMMICH_URL and IMMICH_API_KEY environment variables.")
-    configuration = immich_python_sdk.Configuration(host=host)
-    configuration.api_key['api_key'] = api_key
-    return immich_python_sdk.ApiClient(configuration)
 
 def download_and_convert_image(api_client: immich_python_sdk.ApiClient, asset_id: str, config: dict) -> bytes | None:
     """
