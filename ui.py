@@ -34,6 +34,8 @@ from io import BytesIO
 from app.services import db_service, immich_service, process_service
 # Using an alias for our exception base class for cleaner code.
 from app.exceptions import AppServiceError
+# Import the centralized session state manager
+from app.ui_state import ui_state
 
 # Initialize the logger for this UI module.
 logger = logging.getLogger(__name__)
@@ -44,28 +46,10 @@ logger = logging.getLogger(__name__)
 def init_session_state():
     """
     Initializes all necessary keys in Streamlit's session state.
-    This function is the single source of truth for the UI's state variables,
-    preventing `AttributeError` exceptions and ensuring a clean start.
+    This is now handled by the UISessionState class for better organization.
     """
-    # Tracks the currently selected suggestion for the main view.
-    st.session_state.setdefault("selected_suggestion_id", None)
-    
-    # Manages the detailed view for a single asset.
-    st.session_state.setdefault("selected_asset_id", None)
-    st.session_state.setdefault("view_mode", "album")  # Can be 'album' or 'photo'
-    
-    # State for the gallery pagination.
-    st.session_state.setdefault("gallery_page", 0)
-    
-    # Tracks which "additional" photos are selected for inclusion.
-    st.session_state.setdefault("included_weak_assets", set())
-    
-    # Manages the checkbox state for bulk enrichment.
-    st.session_state.setdefault("suggestions_to_enrich", set())
-    
-    # Sorting options for pending suggestions
-    st.session_state.setdefault("sort_by", "image_count")
-    st.session_state.setdefault("sort_order", "desc")
+    # The ui_state object automatically initializes defaults when imported
+    pass
 
 @st.cache_resource
 def get_image_cache():
@@ -135,18 +119,9 @@ def _correct_image_orientation(image_bytes: bytes) -> bytes:
 def switch_to_album_view(suggestion_id: int):
     """
     Callback to cleanly switch the main view to a specific album.
-    Resets all relevant session state to ensure the new album displays correctly.
+    Uses the centralized session state manager for clean state transitions.
     """
-    # Clear state related to the previously viewed album.
-    if st.session_state.selected_suggestion_id != suggestion_id:
-        st.session_state.gallery_page = 0
-        st.session_state.included_weak_assets = set()
-        # Reset pagination for both core photos and weak assets
-        st.session_state.core_photos_page = 0
-        st.session_state.weak_assets_page = 0
-
-    st.session_state.selected_suggestion_id = suggestion_id
-    st.session_state.view_mode = 'album'
+    ui_state.switch_to_album(suggestion_id)
     
     # We don't need to manually clear caches here, as Streamlit's data flow
     # will naturally call the correct cached functions with the new ID.
@@ -220,8 +195,8 @@ def render_suggestion_list():
                 if deleted_count > 0:
                     st.toast(f"Deleted {deleted_count} pending suggestions!", icon="🗑️")
                     # Clear any selected suggestion if it was deleted
-                    st.session_state.selected_suggestion_id = None
-                    st.session_state.suggestions_to_enrich.clear()
+                    ui_state.selected_suggestion_id = None
+                    ui_state.suggestions_to_enrich.clear()
                 else:
                     st.toast("No pending suggestions to delete", icon="ℹ️")
                 st.session_state.confirm_delete_all = False
@@ -251,7 +226,7 @@ def render_suggestion_list():
             "Field",
             options=list(sort_options.keys()),
             format_func=lambda x: sort_options[x],
-            index=list(sort_options.keys()).index(st.session_state.sort_by),
+            index=list(sort_options.keys()).index(ui_state.sort_by),
             key="sort_by_select",
             label_visibility="collapsed"
         )
@@ -261,19 +236,16 @@ def render_suggestion_list():
             "Order", 
             options=["desc", "asc"],
             format_func=lambda x: "High→Low" if x == "desc" else "Low→High",
-            index=0 if st.session_state.sort_order == "desc" else 1,
+            index=0 if ui_state.sort_order == "desc" else 1,
             key="sort_order_select",
             label_visibility="collapsed"
         )
     
     # Update session state if changed
-    if sort_by != st.session_state.sort_by or sort_order != st.session_state.sort_order:
-        st.session_state.sort_by = sort_by
-        st.session_state.sort_order = sort_order
-        st.rerun()
+    ui_state.update_sorting(sort_by, sort_order)
     
     # Fetch suggestions with sorting
-    suggestions = db_service.get_pending_suggestions(sort_by=st.session_state.sort_by, sort_order=st.session_state.sort_order)
+    suggestions = db_service.get_pending_suggestions(sort_by=ui_state.sort_by, sort_order=ui_state.sort_order)
 
     if not suggestions:
         st.sidebar.info("No pending suggestions. Run a scan!")
@@ -285,21 +257,21 @@ def render_suggestion_list():
     
     # First row: Enrich and Clear
     col1, col2 = st.sidebar.columns(2)
-    if col1.button("✨ Enrich Selected", use_container_width=True, disabled=not st.session_state.suggestions_to_enrich):
-        for s_id in list(st.session_state.suggestions_to_enrich):
+    if col1.button("✨ Enrich Selected", use_container_width=True, disabled=not ui_state.suggestions_to_enrich):
+        for s_id in list(ui_state.suggestions_to_enrich):
             process_service.start_enrichment(s_id)
-        st.session_state.suggestions_to_enrich.clear()
+        ui_state.clear_suggestion_selections()
         st.toast("Enrichment process(es) started!", icon="✨")
         st.rerun()
 
     if col2.button("Clear Selection", use_container_width=True):
-        st.session_state.suggestions_to_enrich.clear()
+        ui_state.clear_suggestion_selections()
         st.rerun()
     
     # Second row: Merge button
-    if st.sidebar.button("🔗 Merge Selected", use_container_width=True, disabled=len(st.session_state.suggestions_to_enrich) < 2):
+    if st.sidebar.button("🔗 Merge Selected", use_container_width=True, disabled=len(ui_state.suggestions_to_enrich) < 2):
         # Set merge intent instead of calling handler directly
-        st.session_state.merge_intent = list(st.session_state.suggestions_to_enrich)
+        ui_state.set_merge_intent(list(ui_state.suggestions_to_enrich))
         st.rerun()
 
     st.sidebar.markdown("---")
@@ -389,7 +361,7 @@ def render_suggestion_list():
                     st.info("AI is analyzing...", icon="⏳")
                 elif suggestion['status'] == 'pending_enrichment':
                     action_col1, action_col2 = st.columns(2)
-                    is_checked = s_id in st.session_state.suggestions_to_enrich
+                    is_checked = s_id in ui_state.suggestions_to_enrich
                     action_col1.checkbox("Select", value=is_checked, key=f"cb_{s_id}", on_change=lambda sid=s_id: toggle_enrich_selection(sid))
                     if action_col2.button("View", key=f"view_{s_id}", use_container_width=True):
                         switch_to_album_view(s_id)
@@ -399,10 +371,10 @@ def render_suggestion_list():
 
 def toggle_enrich_selection(suggestion_id):
     """Callback to add/remove a suggestion from the bulk enrichment set."""
-    if suggestion_id in st.session_state.suggestions_to_enrich:
-        st.session_state.suggestions_to_enrich.remove(suggestion_id)
+    if suggestion_id in ui_state.suggestions_to_enrich:
+        ui_state.suggestions_to_enrich.remove(suggestion_id)
     else:
-        st.session_state.suggestions_to_enrich.add(suggestion_id)
+        ui_state.suggestions_to_enrich.add(suggestion_id)
 
 
 def render_album_view(suggestion: dict):
@@ -523,7 +495,7 @@ def render_album_actions(suggestion: dict):
 
     # Back to List Button
     if cols[3].button("⬅️ Back to List", use_container_width=True):
-        st.session_state.selected_suggestion_id = None
+        ui_state.selected_suggestion_id = None
         st.rerun()
 
 
@@ -532,7 +504,7 @@ def handle_approve_action(suggestion: dict):
     with st.spinner("Creating album in Immich... This may take a moment."):
         try:
             strong_assets = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-            final_asset_ids = strong_assets + list(st.session_state.included_weak_assets)
+            final_asset_ids = strong_assets + list(ui_state.included_weak_assets)
             
             success = immich_service.create_album(
                 title=suggestion['vlm_title'],
@@ -544,7 +516,7 @@ def handle_approve_action(suggestion: dict):
             if success:
                 db_service.update_suggestion_status(suggestion['id'], 'approved')
                 st.success(f"Album '{suggestion['vlm_title']}' created successfully in Immich!")
-                st.session_state.selected_suggestion_id = None
+                ui_state.selected_suggestion_id = None
                 time.sleep(2) # Give user time to read the success message
                 st.rerun()
             else:
@@ -559,7 +531,7 @@ def handle_reject_action(suggestion_id: int):
     try:
         db_service.update_suggestion_status(suggestion_id, 'rejected')
         st.warning("Suggestion has been rejected and will be hidden.")
-        st.session_state.selected_suggestion_id = None
+        ui_state.selected_suggestion_id = None
         time.sleep(2)
         st.rerun()
     except AppServiceError as e:
@@ -634,7 +606,7 @@ def handle_merge_suggestions(suggestion_ids: list[int]):
                     # Don't rerun here, let it continue to the merge logic
                     
                 if col2.button("❌ Cancel", key=f"{merge_key}_cancel", use_container_width=True):
-                    st.session_state.suggestions_to_enrich.clear()
+                    ui_state.suggestions_to_enrich.clear()
                     # Clean up confirmation state
                     if f"{merge_key}_confirmed" in st.session_state:
                         del st.session_state[f"{merge_key}_confirmed"]
@@ -661,11 +633,11 @@ def handle_merge_suggestions(suggestion_ids: list[int]):
                 del st.session_state[f"{merge_key}_confirmed"]
             
             # Clear the selection since merge is complete
-            st.session_state.suggestions_to_enrich.clear()
+            ui_state.suggestions_to_enrich.clear()
             
             # Switch to viewing the merged suggestion
-            st.session_state.selected_suggestion_id = merged_id
-            st.session_state.view_mode = 'album'
+            ui_state.selected_suggestion_id = merged_id
+            ui_state.view_mode = 'album'
             
             st.success(f"✅ Successfully merged {len(suggestion_ids)} suggestions into one album!")
             st.toast(f"Successfully merged {len(suggestion_ids)} suggestions!", icon="🔗")
@@ -711,30 +683,30 @@ def render_photo_grid(asset_ids: list[str], cover_id: str | None):
         col1, col2, col3, col4 = st.columns([1, 1, 2, 1])
         
         with col1:
-            if st.button("◀ Previous", key="core_prev", disabled=st.session_state.core_photos_page == 0):
-                st.session_state.core_photos_page -= 1
+            if st.button("◀ Previous", key="core_prev", disabled=ui_state.core_photos_page == 0):
+                ui_state.core_photos_page -= 1
                 st.rerun()
         
         with col2:
-            if st.button("Next ▶", key="core_next", disabled=st.session_state.core_photos_page == total_pages - 1):
-                st.session_state.core_photos_page += 1
+            if st.button("Next ▶", key="core_next", disabled=ui_state.core_photos_page == total_pages - 1):
+                ui_state.core_photos_page += 1
                 st.rerun()
         
         with col3:
-            st.caption(f"Page {st.session_state.core_photos_page + 1} of {total_pages} • {len(asset_ids)} photos")
+            st.caption(f"Page {ui_state.core_photos_page + 1} of {total_pages} • {len(asset_ids)} photos")
         
         with col4:
             # Jump to cover photo page if there is one
             if cover_id and cover_id in asset_ids:
                 cover_index = asset_ids.index(cover_id)
                 cover_page = cover_index // items_per_page
-                if cover_page != st.session_state.core_photos_page:
+                if cover_page != ui_state.core_photos_page:
                     if st.button("📷 Cover", key="jump_to_cover", help="Go to cover photo"):
-                        st.session_state.core_photos_page = cover_page
+                        ui_state.core_photos_page = cover_page
                         st.rerun()
         
         # Get items for current page
-        start_idx = st.session_state.core_photos_page * items_per_page
+        start_idx = ui_state.core_photos_page * items_per_page
         end_idx = min(start_idx + items_per_page, len(asset_ids))
         page_asset_ids = asset_ids[start_idx:end_idx]
         
@@ -763,7 +735,7 @@ def render_photo_grid(asset_ids: list[str], cover_id: str | None):
                         # Add a small overlay button for clicking
                         if st.button("👁️", key=f"view_{asset_id}", help="View full photo", use_container_width=True):
                             st.session_state.selected_asset_id = asset_id
-                            st.session_state.view_mode = 'photo'
+                            ui_state.view_mode = 'photo'
                             st.rerun()
                     
                     except Exception as e:
@@ -774,7 +746,7 @@ def render_photo_grid(asset_ids: list[str], cover_id: str | None):
                         # Still allow viewing (maybe full image works)
                         if st.button("👁️ Try anyway", key=f"view_{asset_id}", help="Try to view full photo", use_container_width=True):
                             st.session_state.selected_asset_id = asset_id
-                            st.session_state.view_mode = 'photo'
+                            ui_state.view_mode = 'photo'
                             st.rerun()
                         
                 else:
@@ -782,7 +754,7 @@ def render_photo_grid(asset_ids: list[str], cover_id: str | None):
                     # Still allow viewing attempt
                     if st.button("👁️ Try anyway", key=f"view_{asset_id}", help="Try to view full photo", use_container_width=True):
                         st.session_state.selected_asset_id = asset_id
-                        st.session_state.view_mode = 'photo'
+                        ui_state.view_mode = 'photo'
                         st.rerun()
 
 
@@ -795,18 +767,18 @@ def render_weak_asset_selector(weak_asset_ids: list[str]):
     def toggle_all_weak_assets():
         if st.session_state.get('select_all_weak', False):
             # Bulk update without triggering individual widget updates
-            st.session_state.included_weak_assets.update(weak_asset_ids)
+            ui_state.included_weak_assets.update(weak_asset_ids)
             # Update all individual checkbox states efficiently
             for asset_id in weak_asset_ids:
                 st.session_state[f"cb_weak_{asset_id}"] = True
         else:
-            st.session_state.included_weak_assets.clear()
+            ui_state.included_weak_assets.clear()
             # Clear all individual checkbox states efficiently  
             for asset_id in weak_asset_ids:
                 st.session_state[f"cb_weak_{asset_id}"] = False
     
     # Show current selection summary
-    total_selected = len(st.session_state.included_weak_assets.intersection(set(weak_asset_ids)))
+    total_selected = len(ui_state.included_weak_assets.intersection(set(weak_asset_ids)))
     
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -824,18 +796,18 @@ def render_weak_asset_selector(weak_asset_ids: list[str]):
         # Pagination controls
         col1, col2, col3 = st.columns([1, 2, 1])
         with col1:
-            if st.button("◀ Previous", disabled=st.session_state.weak_assets_page == 0):
-                st.session_state.weak_assets_page -= 1
+            if st.button("◀ Previous", disabled=ui_state.weak_assets_page == 0):
+                ui_state.weak_assets_page -= 1
                 st.rerun()
         with col2:
-            st.caption(f"Page {st.session_state.weak_assets_page + 1} of {total_pages}")
+            st.caption(f"Page {ui_state.weak_assets_page + 1} of {total_pages}")
         with col3:
-            if st.button("Next ▶", disabled=st.session_state.weak_assets_page == total_pages - 1):
-                st.session_state.weak_assets_page += 1
+            if st.button("Next ▶", disabled=ui_state.weak_assets_page == total_pages - 1):
+                ui_state.weak_assets_page += 1
                 st.rerun()
         
         # Get items for current page
-        start_idx = st.session_state.weak_assets_page * items_per_page
+        start_idx = ui_state.weak_assets_page * items_per_page
         end_idx = min(start_idx + items_per_page, len(weak_asset_ids))
         page_asset_ids = weak_asset_ids[start_idx:end_idx]
     else:
@@ -861,19 +833,19 @@ def render_weak_asset_selector(weak_asset_ids: list[str]):
                     with view_col:
                         if st.button("👁️", key=f"weak_view_{asset_id}", help="View full photo"):
                             st.session_state.selected_asset_id = asset_id
-                            st.session_state.view_mode = 'photo'
+                            ui_state.view_mode = 'photo'
                             st.rerun()
                     
                     with include_col:
                         # Use efficient state lookup
                         checkbox_key = f"cb_weak_{asset_id}"
                         if checkbox_key not in st.session_state:
-                            st.session_state[checkbox_key] = asset_id in st.session_state.included_weak_assets
+                            st.session_state[checkbox_key] = asset_id in ui_state.included_weak_assets
                         
                         if st.checkbox("Include", key=checkbox_key, label_visibility="collapsed"):
-                            st.session_state.included_weak_assets.add(asset_id)
+                            ui_state.included_weak_assets.add(asset_id)
                         else:
-                            st.session_state.included_weak_assets.discard(asset_id)
+                            ui_state.included_weak_assets.discard(asset_id)
                 else:
                     st.error("🖼️")
                     st.caption(f"Asset: {asset_id[:8]}...")
@@ -883,19 +855,19 @@ def render_weak_asset_selector(weak_asset_ids: list[str]):
                     with view_col:
                         if st.button("👁️", key=f"weak_view_{asset_id}", help="Try to view"):
                             st.session_state.selected_asset_id = asset_id
-                            st.session_state.view_mode = 'photo'
+                            ui_state.view_mode = 'photo'
                             st.rerun()
                     
                     with include_col:
                         # Use efficient state lookup
                         checkbox_key = f"cb_weak_{asset_id}"
                         if checkbox_key not in st.session_state:
-                            st.session_state[checkbox_key] = asset_id in st.session_state.included_weak_assets
+                            st.session_state[checkbox_key] = asset_id in ui_state.included_weak_assets
                         
                         if st.checkbox("Include", key=checkbox_key, label_visibility="collapsed"):
-                            st.session_state.included_weak_assets.add(asset_id)
+                            ui_state.included_weak_assets.add(asset_id)
                         else:
-                            st.session_state.included_weak_assets.discard(asset_id)
+                            ui_state.included_weak_assets.discard(asset_id)
 
 # Removed toggle_weak_asset function - now using inline checkbox handling for better performance
 
@@ -920,7 +892,7 @@ def render_photo_view(suggestion: dict):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col1:
         if st.button("⬅️ Back to Album", use_container_width=True):
-            st.session_state.view_mode = 'album'
+            ui_state.view_mode = 'album'
             st.session_state.selected_asset_id = None
             st.rerun()
     
@@ -975,7 +947,7 @@ def render_photo_view(suggestion: dict):
             logger.error(f"Unexpected error loading photo {asset_id}: {e}")
             st.error("An unexpected error occurred while loading the photo")
             if st.button("Back to Album"):
-                st.session_state.view_mode = 'album'
+                ui_state.view_mode = 'album'
                 st.session_state.selected_asset_id = None
                 st.rerun()
             return
@@ -1082,17 +1054,18 @@ def render_suggestions_table_view():
     """Renders a table view of all pending suggestions when no album is selected."""
     
     # Check for merge intent first
-    if hasattr(st.session_state, 'merge_intent') and st.session_state.merge_intent:
-        logger.info(f"Processing merge intent for {st.session_state.merge_intent}")
-        handle_merge_suggestions(st.session_state.merge_intent)
+    if ui_state.has_merge_intent():
+        merge_intent = ui_state.get_merge_intent()
+        logger.info(f"Processing merge intent for {merge_intent}")
+        handle_merge_suggestions(merge_intent)
         # Clear the intent after processing
-        del st.session_state.merge_intent
+        ui_state.clear_merge_intent()
         return
     
     # Header with title and stats
     suggestions = db_service.get_pending_suggestions(
-        sort_by=st.session_state.sort_by, 
-        sort_order=st.session_state.sort_order
+        sort_by=ui_state.sort_by, 
+        sort_order=ui_state.sort_order
     )
     
     col1, col2 = st.columns([3, 1])
@@ -1109,22 +1082,22 @@ def render_suggestions_table_view():
     
     # Bulk actions
     with col1:
-        if st.button("✨ Enrich Selected", disabled=not st.session_state.suggestions_to_enrich, use_container_width=True):
-            for s_id in list(st.session_state.suggestions_to_enrich):
+        if st.button("✨ Enrich Selected", disabled=not ui_state.suggestions_to_enrich, use_container_width=True):
+            for s_id in list(ui_state.suggestions_to_enrich):
                 process_service.start_enrichment(s_id)
-            st.session_state.suggestions_to_enrich.clear()
+            ui_state.suggestions_to_enrich.clear()
             st.toast("Enrichment process(es) started!", icon="✨")
             st.rerun()
     
     with col2:
-        if st.button("🔗 Merge Selected", disabled=len(st.session_state.suggestions_to_enrich) < 2, use_container_width=True):
+        if st.button("🔗 Merge Selected", disabled=len(ui_state.suggestions_to_enrich) < 2, use_container_width=True):
             # Set merge intent instead of calling handler directly
-            st.session_state.merge_intent = list(st.session_state.suggestions_to_enrich)
+            ui_state.set_merge_intent(list(ui_state.suggestions_to_enrich))
             st.rerun()
     
     with col3:
         if st.button("Clear Selection", use_container_width=True):
-            st.session_state.suggestions_to_enrich.clear()
+            ui_state.suggestions_to_enrich.clear()
             st.rerun()
     
     # Delete all button with confirmation
@@ -1142,8 +1115,8 @@ def render_suggestions_table_view():
                     deleted_count = db_service.delete_all_pending_suggestions()
                     if deleted_count > 0:
                         st.toast(f"Deleted {deleted_count} pending suggestions!", icon="🗑️")
-                        st.session_state.selected_suggestion_id = None
-                        st.session_state.suggestions_to_enrich.clear()
+                        ui_state.selected_suggestion_id = None
+                        ui_state.suggestions_to_enrich.clear()
                     else:
                         st.toast("No pending suggestions to delete", icon="ℹ️")
                     st.session_state.confirm_delete_all_table = False
@@ -1198,23 +1171,15 @@ def render_suggestions_table_view():
             st.toast("Location sorting not yet implemented", icon="ℹ️")
     
     with header_cols[4]:
-        sort_icon = "🔽" if st.session_state.sort_by == "event_start_date" and st.session_state.sort_order == "desc" else "🔼" if st.session_state.sort_by == "event_start_date" else ""
+        sort_icon = "🔽" if ui_state.sort_by == "event_start_date" and ui_state.sort_order == "desc" else "🔼" if ui_state.sort_by == "event_start_date" else ""
         if st.button(f"**📅 Date** {sort_icon}", key="sort_date", use_container_width=True):
-            if st.session_state.sort_by == "event_start_date":
-                st.session_state.sort_order = "asc" if st.session_state.sort_order == "desc" else "desc"
-            else:
-                st.session_state.sort_by = "event_start_date"
-                st.session_state.sort_order = "desc"
+            ui_state.toggle_sort("event_start_date")
             st.rerun()
     
     with header_cols[5]:
-        sort_icon = "🔽" if st.session_state.sort_by == "image_count" and st.session_state.sort_order == "desc" else "🔼" if st.session_state.sort_by == "image_count" else ""
+        sort_icon = "🔽" if ui_state.sort_by == "image_count" and ui_state.sort_order == "desc" else "🔼" if ui_state.sort_by == "image_count" else ""
         if st.button(f"**📊 Photos** {sort_icon}", key="sort_photos", use_container_width=True):
-            if st.session_state.sort_by == "image_count":
-                st.session_state.sort_order = "asc" if st.session_state.sort_order == "desc" else "desc"
-            else:
-                st.session_state.sort_by = "image_count"
-                st.session_state.sort_order = "desc"
+            ui_state.toggle_sort("image_count")
             st.rerun()
     
     with header_cols[6]:
@@ -1234,12 +1199,12 @@ def render_suggestions_table_view():
         
         # Checkbox
         with cols[0]:
-            is_selected = s_id in st.session_state.suggestions_to_enrich
+            is_selected = s_id in ui_state.suggestions_to_enrich
             if st.checkbox("Select", value=is_selected, key=f"table_select_{s_id}", label_visibility="collapsed"):
-                if s_id not in st.session_state.suggestions_to_enrich:
-                    st.session_state.suggestions_to_enrich.add(s_id)
+                if s_id not in ui_state.suggestions_to_enrich:
+                    ui_state.suggestions_to_enrich.add(s_id)
             else:
-                st.session_state.suggestions_to_enrich.discard(s_id)
+                ui_state.suggestions_to_enrich.discard(s_id)
         
         # Thumbnail
         with cols[1]:
@@ -1356,7 +1321,7 @@ def main():
         render_scan_controls()
 
     # --- Main Content Area ---
-    selected_id = st.session_state.selected_suggestion_id
+    selected_id = ui_state.selected_suggestion_id
     if selected_id is None:
         # If no album is selected, show the pending suggestions table view.
         render_suggestions_table_view()
@@ -1370,14 +1335,14 @@ def main():
                 # Auto-refresh every 3 seconds while enrichment is running
                 time.sleep(3)
                 st.rerun()
-            if st.session_state.view_mode == 'photo' and st.session_state.selected_asset_id:
+            if ui_state.view_mode == 'photo' and st.session_state.selected_asset_id:
                 render_photo_view(suggestion)
             else:
                 render_album_view(suggestion)
         else:
             # This can happen if the suggestion was deleted in another session.
             st.error(f"Suggestion with ID {selected_id} not found. It may have been deleted.")
-            st.session_state.selected_suggestion_id = None
+            ui_state.selected_suggestion_id = None
             time.sleep(2)
             st.rerun()
 
