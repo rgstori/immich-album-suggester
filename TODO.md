@@ -31,28 +31,16 @@ All critical security and safety issues have been addressed:
 
 ### **NEW MEDIUM PRIORITY ISSUES** 🚨
 
-6. **Incomplete Type Hints** 🆕
-   - Many functions missing return type annotations
-   - **Impact**: Reduces IDE support and type checking effectiveness
-   - **Fix**: Add comprehensive type hints throughout codebase
-   - **Priority locations**: `clustering.py`, `geocoding.py`, most service methods
-
-7. **Complex Session State Management** 🆕
-   - `ui.py` has 8+ session state variables with complex interdependencies
-   - **Impact**: Hard to debug UI state issues, prone to bugs
-   - **Fix**: Create a session state management class with clear state transitions
-
-8. **Hardcoded Configuration Values** 🆕
-    - Some values still hardcoded despite config.yaml existence
-    - **Locations**: `ui.py` cache settings, `vlm.py` retry delays, `immich_api.py` URL patterns
-    - **Fix**: Move all configuration to `config.yaml`
-
-9. **Inconsistent Error Logging** 🆕
-    - Some modules use `print()`, others use `logging`, some use both
-    - **Impact**: Inconsistent log format and difficulty in production monitoring
-    - **Fix**: Standardize on `logging` module throughout
+7. **Complex Session State Management** 🔄 **PARTIALLY ADDRESSED**
+   - `ui.py` session state improved with merge functionality but still complex
+   - **Remaining Issues**: 10+ session state variables with some interdependencies
+   - **Recent Improvements**: Better unique key management for confirmations, unified selection state
+   - **Remaining Fix**: Create a session state management class with clear state transitions
 
 ### **PREVIOUSLY COMPLETED** ✅
+- **Incomplete Type Hints** ✅ - Added comprehensive type hints to service methods
+- **Inconsistent Error Logging** ✅ - Standardized logging throughout codebase  
+- **Hardcoded Configuration Values** ✅ - Moved all hardcoded values to config.yaml
 - Album View Missing Metadata ✅
 - Poor Error Messages ✅
 - Inefficient Cache Clearing ✅
@@ -68,8 +56,9 @@ All critical security and safety issues have been addressed:
     - **Impact**: High memory usage with large photo libraries
     - **Fix**: Use database-side filtering or pagination
 
-11. **Redundant Thumbnail Requests** 🆕
-    - UI may request same thumbnail multiple times during rendering
+11. **Redundant Thumbnail Requests** 🔄 **PARTIALLY ADDRESSED**
+    - Recent improvements: Better caching in table view, reduced duplicate requests
+    - **Remaining Issue**: Some edge cases during view transitions
     - **Fix**: Implement request deduplication in caching layer
 
 12. **Missing Graceful Degradation** 🆕
@@ -100,6 +89,23 @@ All critical security and safety issues have been addressed:
     - Only basic title/description templates
     - **Enhancement**: Rich template system with conditional logic
 
+### **UI ENHANCEMENTS** 🆕
+
+18. **Advanced Table Features** 🆕
+    - Additional sortable columns (title, location, status)
+    - **Enhancement**: Implement database-level sorting for all columns
+    - **Also**: Add filtering/search capabilities to table view
+
+19. **Merge Preview** 🆕
+    - Basic merge confirmation implemented
+    - **Enhancement**: Visual preview showing combined photo grid before merge
+    - **Also**: Undo functionality for recently merged albums
+
+20. **Bulk Status Operations** 🆕
+    - Current bulk operations: merge, enrich, delete
+    - **Enhancement**: Bulk approve/reject, bulk status changes
+    - **Also**: Batch album creation for approved suggestions
+
 ## Implementation Priority
 
 ### **IMMEDIATE (This Week)** ✅
@@ -109,10 +115,10 @@ All critical security and safety issues have been addressed:
 4. ✅ Implement process cleanup handlers (High Stability)
 
 ### **NEXT SPRINT (High Impact)**  
-1. Add comprehensive type hints (Code Quality)
-2. Standardize error logging (Maintainability)
-3. Simplify session state management (Code Quality)
-4. Move hardcoded values to config (Maintainability)
+1. ✅ Add comprehensive type hints (Code Quality)
+2. ✅ Standardize error logging (Maintainability)  
+3. ✅ Move hardcoded values to config (Maintainability)
+4. Simplify session state management (Code Quality)
 
 ### **FUTURE ENHANCEMENTS**
 5. Performance optimizations (database queries, caching)
@@ -164,6 +170,21 @@ All critical security and safety issues have been addressed:
 - Thread-safe configuration service with double-checked locking pattern
 - VLM request size validation to prevent resource exhaustion
 - Process cleanup handlers with graceful shutdown and signal handling
+
+**Code Quality Improvements (v2.3)**
+- Comprehensive type hints added to all service methods and core modules
+- Standardized logging throughout codebase replacing print() statements
+- All hardcoded configuration values moved to config.yaml for maintainability
+- Enhanced configuration management with proper defaults and validation
+
+**UI Architecture Enhancements (v2.2)**
+- Dual view system: table overview when no album selected, detailed view for individual albums
+- Comprehensive table view with sortable columns (date, photo count) and visual status indicators
+- Enhanced bulk operations: multi-select merge functionality with intelligent data combination
+- Merge algorithm with asset deduplication, date range calculation, and location intelligence
+- Two-stage confirmation flows for destructive operations with preview information
+- Unified selection state management across sidebar and main table views
+- Accessibility improvements: proper checkbox labels and keyboard navigation
 
 ---
 

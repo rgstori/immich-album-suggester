@@ -77,6 +77,23 @@ class ImmichService:
             # Even if the underlying function has retries, we log any final, unhandled failure.
             logger.warning(f"Final attempt to download thumbnail for asset {asset_id} failed.", exc_info=True)
             return None
+    
+    def get_full_image_bytes(self, asset_id: str) -> bytes | None:
+        """
+        Downloads the full-size original image for a single asset via the Immich API.
+        Returns image bytes or None if the download fails.
+
+        Args:
+            asset_id: The ID of the asset to fetch.
+
+        Returns:
+            The full image content as bytes, or None if download fails.
+        """
+        try:
+            return immich_api.download_full_image(self.api_client, asset_id, config.yaml)
+        except Exception as e:
+            logger.warning(f"Failed to download full image for asset {asset_id}.", exc_info=True)
+            return None
             
     def get_exif_data(self, asset_id: str) -> dict | None:
         """

@@ -17,13 +17,14 @@ import sys
 from pathlib import Path
 import dotenv
 import threading
+from typing import Any, Dict, Optional, Union
 
 class AppConfig:
-    _instance = None
-    _loaded = False
-    _lock = threading.Lock()
+    _instance: Optional['AppConfig'] = None
+    _loaded: bool = False
+    _lock: threading.Lock = threading.Lock()
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls, *args, **kwargs) -> 'AppConfig':
         if cls._instance is None:
             with cls._lock:
                 # Double-check pattern to prevent race conditions
@@ -31,7 +32,7 @@ class AppConfig:
                     cls._instance = super(AppConfig, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         # The __init__ might be called multiple times, but the loading logic
         # is protected by the `_loaded` flag and thread lock.
         if not self._loaded:
@@ -49,7 +50,7 @@ class AppConfig:
                     self._loaded = True
                     logging.info("Application configuration and logging initialized successfully.")
 
-    def _load_yaml_config(self):
+    def _load_yaml_config(self) -> None:
         """Loads the main config.yaml file."""
         config_path = self.project_root / 'config.yaml'
         try:
@@ -63,7 +64,7 @@ class AppConfig:
             print(f"FATAL: Error parsing YAML configuration file: {e}", file=sys.stderr)
             sys.exit(1)
 
-    def _load_env_vars(self):
+    def _load_env_vars(self) -> None:
         """Loads all required and optional environment variables."""
         self.immich_url = os.getenv("IMMICH_URL")
         self.immich_api_key = os.getenv("IMMICH_API_KEY")
@@ -73,7 +74,7 @@ class AppConfig:
         self.db_hostname = os.getenv("DB_HOSTNAME")
         self.db_port = os.getenv("DB_PORT")
 
-    def _setup_logging(self):
+    def _setup_logging(self) -> None:
         """Configures the root logger for consistent logging across the app."""
         log_config = self.get('logging', {})
         log_level_str = log_config.get('level', 'INFO').upper()
@@ -99,7 +100,7 @@ class AppConfig:
         logging.getLogger("urllib3").setLevel(logging.WARNING)
         logging.getLogger("requests").setLevel(logging.WARNING)
 
-    def get(self, key_path: str, default=None):
+    def get(self, key_path: str, default: Any = None) -> Any:
         """
         Safely retrieves a value from the nested YAML configuration.
         

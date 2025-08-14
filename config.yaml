@@ -27,6 +27,8 @@ vlm:
   sample_size: 10          # Number of photos to send to the VLM per album.
   retry_attempts: 3         # Number of times to try the VLM call if it fails.
   retry_delay_seconds: 5    # How long to wait between retries.
+  image_token_estimate: 500       # Conservative token estimate per image
+  max_image_size_bytes: 2097152   # Max individual image size (2MB)
   # The full prompt for the VLM. Using YAML's block scalar for readability.
   prompt: |
     You are an automated photo album assistant. Analyze the provided images and context. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json.
@@ -61,3 +63,6 @@ ui:
   welcome_info: "Select a pending suggestion from the sidebar to review it, or start a new scan."
   thumbnails_per_page: 50
   gallery_columns: 6
+  cache_max_entries: 500           # Maximum entries in thumbnail cache
+  log_container_height: 200        # Height of the log display container
+  recent_logs_count: 50            # Number of recent logs to display

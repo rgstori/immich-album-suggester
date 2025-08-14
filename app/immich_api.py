@@ -12,7 +12,6 @@ import sys
 import logging
 
 # Configure logging to avoid exposing sensitive data
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 def _normalize_host(host: str) -> str:
@@ -103,23 +102,57 @@ def download_and_convert_image(api_client: immich_python_sdk.ApiClient, asset_id
             raise last_exc
         else:
             # No candidate worked but no exception captured (unlikely)
-            print(f"    - [API-WARN] No thumbnail URL variant worked for asset {asset_id}. Tried: {candidate_urls}", file=sys.stderr)
+            logger.warning(f"No thumbnail URL variant worked for asset {asset_id}. Tried: {candidate_urls}")
             return None
     
     except requests.exceptions.RequestException as e:
         tried = " | ".join(candidate_urls)
-        print(f"    - [API-WARN] Error downloading asset {asset_id} thumbnail. Tried: {tried}. Error: {e}", file=sys.stderr)
+        logger.warning(f"Error downloading asset {asset_id} thumbnail. Tried: {tried}. Error: {e}")
     except Exception as e:
-        print(f"    - [API-WARN] Failed to convert image for asset {asset_id}: {e}", file=sys.stderr)
+        logger.warning(f"Failed to convert image for asset {asset_id}: {e}")
         
     return None
+
+
+def download_full_image(api_client: immich_python_sdk.ApiClient, asset_id: str, config: dict) -> bytes | None:
+    """
+    Downloads the full-size original image for a given asset ID using the official Immich API.
+    
+    Returns:
+        Original image data as bytes, or None if download fails.
+    """
+    immich_url = api_client.configuration.host
+    api_key = api_client.configuration.api_key['api_key']
+    headers = {'x-api-key': api_key}
+    api_base = _build_api_base(immich_url)
+    
+    # Use the correct Immich API endpoint for original images
+    original_url = f"{api_base}/assets/{asset_id}/original"
+    
+    try:
+        response = requests.get(original_url, headers=headers, stream=True, timeout=config['immich']['api_timeout_seconds'])
+        
+        if response.status_code == 200:
+            return response.content
+        elif response.status_code == 404:
+            logger.warning(f"Asset {asset_id} not found or original not available")
+            return None
+        else:
+            logger.warning(f"Failed to download original for asset {asset_id}. Status: {response.status_code}")
+            response.raise_for_status()
+            return None
+    
+    except requests.RequestException as e:
+        logger.warning(f"Error downloading original image for asset {asset_id}: {e}")
+        return None
+
 
 def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, asset_ids: list, cover_asset_id: str, highlight_ids: list):
     """
     Creates a complete album in Immich, including adding assets, setting a
     cover photo, and favoriting highlights.
     """
-    print(f"  - [API] Attempting to create album: '{title}'")
+    logger.info(f"Attempting to create album: '{title}'")
     try:
         albums_api = immich_python_sdk.AlbumsApi(api_client)
         asset_api = immich_python_sdk.AssetsApi(api_client)
@@ -127,7 +160,7 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
         # 1. Create the album
         create_dto = immich_python_sdk.CreateAlbumDto(album_name=title)
         album = albums_api.create_album(create_album_dto=create_dto)
-        print(f"    - Album '{title}' created with ID: {album.id}")
+        logger.info(f"Album '{title}' created with ID: {album.id}")
         
         # 2. Add assets to the album
         # The 'add_assets_to_album' endpoint expects a payload with an 'ids' key.
@@ -135,18 +168,18 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
         
         # First, ensure asset_ids is not empty to avoid a potentially bad request.
         if not asset_ids:
-            print("    - [API-WARN] No assets to add to the album. Skipping asset addition.")
+            logger.warning("No assets to add to the album. Skipping asset addition.")
         else:
             add_dto = immich_python_sdk.BulkIdsDto(ids=asset_ids) 
             # The second argument to the function call is the DTO itself.
             albums_api.add_assets_to_album(id=album.id, bulk_ids_dto=add_dto)
-            print(f"    - Added {len(asset_ids)} assets.")
+            logger.info(f"Added {len(asset_ids)} assets.")
 
         # 3. Set the cover photo
         if cover_asset_id and cover_asset_id in asset_ids:
             update_dto = immich_python_sdk.UpdateAlbumDto(album_thumbnail_id=cover_asset_id)
             albums_api.update_album_info(id=album.id, update_album_dto=update_dto)
-            print(f"    - Set asset {cover_asset_id} as album cover.")
+            logger.info(f"Set asset {cover_asset_id} as album cover.")
             
         # 4. Favorite the highlight photos
         if highlight_ids:
@@ -154,12 +187,12 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
             for asset_id in highlight_ids:
                 if asset_id in asset_ids:
                     asset_api.update_asset(id=asset_id, update_asset_dto=update_asset_dto)
-            print(f"    - Favorited {len(highlight_ids)} highlight assets.")
+            logger.info(f"Favorited {len(highlight_ids)} highlight assets.")
         
         return True
     
     except immich_python_sdk.ApiException as e:
         # Provide more detail in the error log
-        print(f"  - [API-ERROR] Failed to create album '{title}'. Reason: {e.reason}", file=sys.stderr)
-        print(f"  - [API-ERROR-BODY] Response Body: {e.body}", file=sys.stderr) # This is crucial for debugging
+        logger.error(f"Failed to create album '{title}'. Reason: {e.reason}")
+        logger.error(f"Response Body: {e.body}")  # This is crucial for debugging
         return False

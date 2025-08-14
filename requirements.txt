@@ -11,3 +11,4 @@ Pillow
 reverse-geocoder
 streamlit
 PyYAML
+pycountry

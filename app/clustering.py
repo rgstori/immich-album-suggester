@@ -9,6 +9,9 @@ import numpy as np
 from sklearn.cluster import DBSCAN
 import networkx as nx
 from scipy.spatial.distance import cosine
+import logging
+
+logger = logging.getLogger(__name__)
 
 def _preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     """Prepares the raw DataFrame for clustering."""
@@ -37,7 +40,7 @@ def find_album_candidates(df: pd.DataFrame, config: dict) -> list[dict]:
     cfg_s2 = config['clustering']['stage2']
 
     # --- STAGE 1: DBSCAN to find "Eventlets" ---
-    print("  - [CLUSTER] Stage 1: Finding dense 'eventlets' using DBSCAN...")
+    logger.info("Stage 1: Finding dense 'eventlets' using DBSCAN")
     # Separate geotagged and non-geotagged assets for different clustering strategies.
     df_geo = df.dropna(subset=['latitude', 'longitude']).copy()
     features_geo = df_geo[['unix_time', 'latitude', 'longitude']].values
@@ -59,13 +62,14 @@ def find_album_candidates(df: pd.DataFrame, config: dict) -> list[dict]:
     df_eventlets = df_clustered[~df_clustered['eventlet_id'].str.contains("_-1")].copy()
     
     if df_eventlets.empty:
-        print("  - [CLUSTER] Stage 1 did not produce any eventlets.")
+        logger.info("Stage 1 did not produce any eventlets")
         return []
         
-    print(f"  - [CLUSTER] Stage 1 found {len(df_eventlets['eventlet_id'].unique())} eventlets.")
+    eventlet_count = len(df_eventlets['eventlet_id'].unique())
+    logger.info(f"Stage 1 found {eventlet_count} eventlets")
 
     # --- STAGE 2: Graph-based merging of Eventlets ---
-    print("  - [CLUSTER] Stage 2: Merging eventlets using visual similarity...")
+    logger.info("Stage 2: Merging eventlets using visual similarity")
     # Summarize each eventlet by its average embedding and time window.
     eventlet_summary = df_eventlets.groupby('eventlet_id').agg(
         mean_embedding=('embedding_list', lambda x: np.mean(np.vstack(x), axis=0)),
@@ -94,7 +98,7 @@ def find_album_candidates(df: pd.DataFrame, config: dict) -> list[dict]:
 
     # Each connected component in the graph is a final album candidate.
     album_components = [list(c) for c in nx.connected_components(G) if len(c) >= cfg_s2['min_eventlets_for_album']]
-    print(f"  - [CLUSTER] Stage 2 merged eventlets into {len(album_components)} final album candidates.")
+    logger.info(f"Stage 2 merged eventlets into {len(album_components)} final album candidates")
     
     # --- Final Output Formatting ---
     final_albums = []

@@ -50,7 +50,7 @@ def get_connection():
         )
         return conn
     except psycopg2.OperationalError as e:
-        print(f"FATAL: Could not connect to the Immich database. Error: {e}", file=sys.stderr)
+        logger.critical(f"Could not connect to the Immich database. Error: {e}")
         sys.exit(1)
 
 
@@ -136,12 +136,12 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
     Returns:
         A pandas DataFrame containing all necessary asset information.
     """
-    print("  - [DB] Fetching asset data from Immich database...")
+    logger.info("Fetching asset data from Immich database")
 
     # Determine schema and verify existence
     schema = _get_schema_name(config)
     if not _schema_exists(conn, schema):
-        print(f"FATAL: PostgreSQL schema '{schema}' does not exist.", file=sys.stderr)
+        logger.critical(f"PostgreSQL schema '{schema}' does not exist")
         with conn.cursor() as cur:
             cur.execute("SELECT schema_name FROM information_schema.schemata ORDER BY schema_name")
             rows = cur.fetchall()
@@ -151,8 +151,8 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
                     available.append(r.get('schema_name'))
                 else:
                     available.append(r[0])
-        print(f"       Available schemas: {', '.join(available)}", file=sys.stderr)
-        print("       Set DB_SCHEMA env var or config.postgres.schema to the correct schema.", file=sys.stderr)
+        logger.critical(f"Available schemas: {', '.join(available)}")
+        logger.critical("Set DB_SCHEMA env var or config.postgres.schema to the correct schema")
         sys.exit(1)
 
     # Resolve table names across Immich versions
@@ -162,16 +162,16 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
 
     if not asset_tbl or not exif_tbl or not smart_tbl:
         tables = _list_tables(conn, schema)
-        print("FATAL: Required Immich tables not found in the target schema.", file=sys.stderr)
-        print(f"       Expected candidates:", file=sys.stderr)
-        print(f"         - asset table: one of ['asset', 'assets'] -> resolved: {asset_tbl}", file=sys.stderr)
-        print(f"         - exif table: one of ['asset_exif', 'exif'] -> resolved: {exif_tbl}", file=sys.stderr)
-        print(f"         - smart_search table: ['smart_search'] -> resolved: {smart_tbl}", file=sys.stderr)
-        print(f"       Tables present in schema '{schema}': {', '.join(tables)}", file=sys.stderr)
-        print("       Tip: Verify your Immich version and schema, and adjust DB_SCHEMA/config.postgres.schema if needed.", file=sys.stderr)
+        logger.critical("Required Immich tables not found in the target schema")
+        logger.critical("Expected candidates:")
+        logger.critical(f"- asset table: one of ['asset', 'assets'] -> resolved: {asset_tbl}")
+        logger.critical(f"- exif table: one of ['asset_exif', 'exif'] -> resolved: {exif_tbl}")
+        logger.critical(f"- smart_search table: ['smart_search'] -> resolved: {smart_tbl}")
+        logger.critical(f"Tables present in schema '{schema}': {', '.join(tables)}")
+        logger.critical("Tip: Verify your Immich version and schema, and adjust DB_SCHEMA/config.postgres.schema if needed")
         sys.exit(1)
 
-    print(f"  - [DB] Using schema '{schema}' with tables: asset='{asset_tbl}', exif='{exif_tbl}', smart_search='{smart_tbl}'")
+    logger.info(f"Using schema '{schema}' with tables: asset='{asset_tbl}', exif='{exif_tbl}', smart_search='{smart_tbl}'")
 
     # Build dynamic filters depending on available columns (e.g., isArchived may not exist)
     # We always filter out soft-deleted assets (deletedAt IS NULL).
@@ -221,8 +221,8 @@ def fetch_assets(conn, config: dict, excluded_asset_ids: list) -> pd.DataFrame:
         limit = config.get('dev_mode', {}).get('sample_size', 0)
         if limit and isinstance(limit, int):
             query += f" LIMIT {limit}"
-            print(f"  - [DB] DEV MODE: Limiting fetch to {limit} most recent assets.")
-    print(f"  - [DB] Applying filters: {' AND '.join(filters)}")
+            logger.info(f"DEV MODE: Limiting fetch to {limit} most recent assets")
+    logger.debug(f"Applying filters: {' AND '.join(filters)}")
 
     try:
         # Using cursor with context manager to ensure proper cleanup

@@ -149,7 +149,8 @@ def _validate_vlm_request_size(encoded_images: list[str], prompt_text: str, max_
     # Estimate image tokens (very rough - actual depends on model and image size)
     # Typical vision models use 100-1000 tokens per image depending on resolution
     total_image_size = sum(len(img) for img in encoded_images)
-    estimated_image_tokens = len(encoded_images) * 500  # Conservative estimate
+    token_estimate = config.get('vlm', {}).get('image_token_estimate', 500)
+    estimated_image_tokens = len(encoded_images) * token_estimate  # Conservative estimate
     
     total_estimated_tokens = text_tokens + estimated_image_tokens
     
@@ -163,8 +164,8 @@ def _validate_vlm_request_size(encoded_images: list[str], prompt_text: str, max_
             f"Reduce image count or use smaller images."
         )
     
-    # Also check for unreasonably large individual images (>2MB base64)
-    max_image_size = 2 * 1024 * 1024  # 2MB
+    # Also check for unreasonably large individual images
+    max_image_size = config.get('vlm', {}).get('max_image_size_bytes', 2 * 1024 * 1024)  # Default 2MB
     for i, img in enumerate(encoded_images):
         if len(img) > max_image_size:
             raise VLMResponseError(
