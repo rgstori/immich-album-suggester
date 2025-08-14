@@ -105,7 +105,20 @@ def run_enrichment_pass(suggestion_id: int):
     all_asset_ids = strong_ids + weak_ids
 
     # Prepare a default result object in case VLM is disabled or fails.
-    event_date_str = candidate_data['event_start_date'].strftime('%B %Y') if candidate_data.get('event_start_date') else "an unknown date"
+    # Parse the date string back to datetime if needed
+    event_start_date = candidate_data.get('event_start_date')
+    if event_start_date:
+        if isinstance(event_start_date, str):
+            # Parse string back to datetime (SQLite returns strings)
+            from datetime import datetime
+            try:
+                event_start_date = datetime.fromisoformat(event_start_date.replace('Z', '+00:00'))
+            except ValueError:
+                # Fallback for different date formats
+                event_start_date = datetime.strptime(event_start_date, '%Y-%m-%d %H:%M:%S.%f')
+        event_date_str = event_start_date.strftime('%B %Y')
+    else:
+        event_date_str = "an unknown date"
     final_result = {
         "vlm_title": config.get('defaults.title_template').format(date_str=event_date_str),
         "vlm_description": config.get('defaults.description'),

@@ -123,12 +123,18 @@ class ProcessService:
         # Register cleanup on normal program exit
         atexit.register(self._cleanup_all_processes)
         
-        # Register signal handlers for common termination signals
-        # Skip signal registration on Windows as it has limited signal support
-        if hasattr(signal, 'SIGTERM'):
-            signal.signal(signal.SIGTERM, self._signal_cleanup_handler)
-        if hasattr(signal, 'SIGINT'):
-            signal.signal(signal.SIGINT, self._signal_cleanup_handler)
+        # Signal handlers can only be registered in the main thread
+        # Skip signal registration if not in main thread (e.g., when imported by Streamlit)
+        try:
+            if hasattr(signal, 'SIGTERM'):
+                signal.signal(signal.SIGTERM, self._signal_cleanup_handler)
+            if hasattr(signal, 'SIGINT'):
+                signal.signal(signal.SIGINT, self._signal_cleanup_handler)
+        except ValueError as e:
+            if "signal only works in main thread" in str(e):
+                logger.debug("Skipping signal handler registration - not in main thread")
+            else:
+                raise
     
     def _signal_cleanup_handler(self, signum: int, frame) -> None:
         """Signal handler that performs cleanup and exits gracefully."""
