@@ -10,10 +10,14 @@ import subprocess
 import sys
 import os
 import logging
+from typing import Literal
 from .config_service import config
 from ..exceptions import ProcessError
 
 logger = logging.getLogger(__name__)
+
+# Define a literal type for scan modes.
+ScanMode = Literal['incremental', 'full']
 
 class ProcessService:
     def __init__(self):
@@ -21,14 +25,14 @@ class ProcessService:
         # The key is a unique identifier (e.g., 'scan' or 'enrich_123').
         self.processes = {}
 
-    def _get_base_command(self):
+    def _get_base_command(self) -> list[str]:
         """Constructs the base command for running the backend script."""
         # Using `sys.executable` ensures we use the same Python interpreter.
         # Using `-m app.main` is the correct way to run a module within a package,
         # ensuring all relative imports work as expected.
         return [sys.executable, "-m", "app.main"]
 
-    def _start_process(self, process_key: str, command: list[str]):
+    def _start_process(self, process_key: str, command: list[str]) -> None:
         """A generic helper to start and track a new process."""
         if self.is_running(process_key):
             logger.warning(f"Process '{process_key}' is already running. Ignoring request.")
@@ -55,21 +59,42 @@ class ProcessService:
             logger.error(f"Failed to start process '{process_key}'.", exc_info=True)
             raise ProcessError(f"Could not start the '{process_key}' background process.") from e
 
-    def start_scan(self, mode: str):
-        """Starts the main clustering scan process."""
-        if mode not in ['incremental', 'full']:
-            raise ValueError("Invalid scan mode specified.")
+    def start_scan(self, mode: ScanMode) -> None:
+        """
+        Starts the main clustering scan process in the background.
+
+        Args:
+            mode: The scan mode, either 'incremental' or 'full'.
         
+        Raises:
+            ProcessError: If the subprocess fails to start.
+        """
         command = self._get_base_command() + [f"--mode={mode}"]
         self._start_process('scan', command)
 
-    def start_enrichment(self, suggestion_id: int):
-        """Starts the VLM enrichment process for a single suggestion."""
+    def start_enrichment(self, suggestion_id: int) -> None:
+        """
+        Starts the VLM enrichment process for a single suggestion.
+
+        Args:
+            suggestion_id: The ID of the suggestion to enrich.
+
+        Raises:
+            ProcessError: If the subprocess fails to start.
+        """
         command = self._get_base_command() + [f"--enrich-id={suggestion_id}"]
         self._start_process(f"enrich_{suggestion_id}", command)
 
     def is_running(self, process_key: str) -> bool:
-        """Checks if a specific process is currently running."""
+        """
+        Checks if a specific process is currently running. Also cleans up finished processes.
+
+        Args:
+            process_key: The unique key for the process (e.g., 'scan', 'enrich_123').
+
+        Returns:
+            True if the process is running, False otherwise.
+        """
         if process_key not in self.processes:
             return False
         

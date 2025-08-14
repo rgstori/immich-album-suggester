@@ -1,111 +1,158 @@
 # TODO: Immich Album Suggester Improvements
 
-## 🔴 CRITICAL - Security Issues ✅ ALL COMPLETED
+## 🔴 CRITICAL - Security & Safety Issues 
 
-1. **SQL Injection Vulnerabilities** ✅
-   - Added whitelist validation for table/column names in `ui.py` and `immich_db.py`
-   - Parameterized queries with input validation
+### **NEW CRITICAL ISSUES** 🚨
 
-2. **API Key Exposure** ✅
-   - Removed API keys from debug logs in `immich_api.py`
-   - Removed database credentials from logs in `immich_db.py`
-   - Implemented secure logging with Python `logging` module
+1. **SQL Injection in Schema Migration** 🆕
+   - `database_service.py:_add_column_if_not_exists()` uses f-strings for SQL construction
+   - **Risk**: Could allow SQL injection if schema/table names are user-controlled
+   - **Fix**: Use parameterized queries or whitelist validation like in `immich_db.py`
+   ```python
+   # VULNERABLE:
+   cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+   # SHOULD BE: Whitelist validation + parameterized approach
+   ```
 
-3. **Missing Input Validation** ✅
-   - Added validation for suggestion IDs and scan modes in subprocess calls
-   - Whitelisted allowed inputs to prevent injection
+2. **Thread Safety in Singleton Pattern** 🆕
+   - `ConfigService` singleton is not thread-safe, could cause race conditions
+   - **Risk**: Multiple threads could create multiple instances or partial initialization
+   - **Fix**: Use thread-safe singleton pattern with `threading.Lock`
 
-## 🟠 HIGH - Stability & Resource Issues ✅ ALL COMPLETED
+3. **Uncontrolled Resource Consumption** 🆕
+   - VLM analysis can send unlimited images (only limited by `sample_size` config)
+   - **Risk**: Could overwhelm VLM service or exceed memory limits
+   - **Fix**: Add hard limits and size validation for base64 encoded images
 
-4. **UI Auto-Refresh** ✅ COMPLETED
-   - Implemented smart polling: 2s when active, 10s when idle
-   - Auto-refresh on scan/enrichment completion with toast notifications
-   - Maintains current album view/page during refresh
+### **PREVIOUSLY COMPLETED** ✅
+- SQL Injection Vulnerabilities ✅
+- API Key Exposure ✅  
+- Missing Input Validation ✅
 
-5. **Database Connection Leaks** ✅ COMPLETED
-   - Fixed connection cleanup in `fetch_assets` function
-   - Added proper try/finally blocks and context managers
-   - All database connections now properly closed
+## 🟠 HIGH - Stability & Robustness Issues
 
-6. **Zombie Process Risk** ✅ COMPLETED
-   - Implemented proper subprocess cleanup with `subprocess.PIPE`
-   - Added exception handling for process creation
-   - Auto-cleanup of completed processes
+### **NEW HIGH PRIORITY ISSUES** 🚨
 
-7. **Unbounded Memory Cache** ✅ COMPLETED
-   - Implemented LRU cache with 50MB size limit
-   - Thread-safe cache with automatic eviction
-   - Suggestion-specific cache clearing
+4. **Broad Exception Handling Masking Errors** 🆕
+   - Multiple locations catch `Exception` instead of specific types
+   - **Risk**: Hides bugs and makes debugging difficult
+   - **Locations**: `vlm.py:134`, `database_service.py:184`, `immich_service.py:67`
+   - **Fix**: Use specific exception types from `app.exceptions`
 
-## 🟡 MEDIUM - User Experience Issues ✅ ALL COMPLETED
+5. **Database Transaction Atomicity** 🆕
+   - `store_initial_suggestion()` and `update_suggestion_with_analysis()` lack explicit transactions
+   - **Risk**: Partial updates if process crashes between operations  
+   - **Fix**: Wrap multi-operation methods in explicit transactions
 
-8. **Album View Missing Metadata** ✅ COMPLETED
-   - Added comprehensive metadata display (photos, dates, locations, status)
-   - Implemented interactive cover photo selection
-   - Added editable titles and descriptions
+6. **Process Cleanup on Shutdown** 🆕
+   - `ProcessService` doesn't handle application shutdown cleanup
+   - **Risk**: Zombie processes if main application crashes
+   - **Fix**: Add signal handlers and cleanup methods
 
-9. **Poor Error Messages** ✅ COMPLETED
-   - Replaced generic "X" with informative error messages
-   - Added retry buttons for failed thumbnail loads
-   - Improved logging with specific error details
+7. **VLM Request Size Validation** 🆕
+   - No validation that base64 images fit within VLM context window
+   - **Risk**: VLM requests fail silently or unpredictably
+   - **Fix**: Calculate total request size before sending
 
-10. **Inefficient Cache Clearing** ✅ COMPLETED
-    - Implemented selective cache invalidation by suggestion ID
-    - LRU cache automatically manages memory usage
-    - Only clears relevant caches instead of everything
+### **PREVIOUSLY COMPLETED** ✅
+- UI Auto-Refresh ✅
+- Database Connection Leaks ✅
+- Zombie Process Risk ✅
+- Unbounded Memory Cache ✅
 
-11. **Album Switching Issues** ✅ COMPLETED
-    - Fixed misbehavior when switching between albums
-    - Added proper loading states and progress indicators
-    - Eliminated race conditions with dedicated switching logic
+## 🟡 MEDIUM - Code Quality & Maintainability
 
-12. **Enrichment Workflow Problems** ✅ COMPLETED
-    - Fixed albums disappearing from sidebar during enrichment
-    - Added status-aware UI with appropriate controls per state
-    - Enhanced feedback when enriching currently viewed album
+### **NEW MEDIUM PRIORITY ISSUES** 🚨
 
-## 🟢 LOW - Code Quality & Maintenance
+8. **Incomplete Type Hints** 🆕
+   - Many functions missing return type annotations
+   - **Impact**: Reduces IDE support and type checking effectiveness
+   - **Fix**: Add comprehensive type hints throughout codebase
+   - **Priority locations**: `clustering.py`, `geocoding.py`, most service methods
 
-11. **Broad Exception Handling**
-    - Catch-all exception blocks hide specific errors
-    - **Fix**: Use specific exception types
+9. **Complex Session State Management** 🆕
+   - `ui.py` has 8+ session state variables with complex interdependencies
+   - **Impact**: Hard to debug UI state issues, prone to bugs
+   - **Fix**: Create a session state management class with clear state transitions
 
-12. **Missing Type Hints**
-    - No type annotations throughout codebase
-    - **Fix**: Add comprehensive type hints
+10. **Hardcoded Configuration Values** 🆕
+    - Some values still hardcoded despite config.yaml existence
+    - **Locations**: `ui.py` cache settings, `vlm.py` retry delays, `immich_api.py` URL patterns
+    - **Fix**: Move all configuration to `config.yaml`
 
-13. **Configuration Hardcoding**
-    - Some values still hardcoded despite config.yaml
-    - **Fix**: Move remaining hardcoded values to configuration
+11. **Inconsistent Error Logging** 🆕
+    - Some modules use `print()`, others use `logging`, some use both
+    - **Impact**: Inconsistent log format and difficulty in production monitoring
+    - **Fix**: Standardize on `logging` module throughout
 
-## NEW - Enhanced UI Features ✅ ALL COMPLETED
+### **PREVIOUSLY COMPLETED** ✅
+- Album View Missing Metadata ✅
+- Poor Error Messages ✅
+- Inefficient Cache Clearing ✅
+- Album Switching Issues ✅
+- Enrichment Workflow Problems ✅
 
-### **Decision-Making Interface Improvements**
-- [x] **Thumbnail Previews** - Added preview images to suggestion list sidebar
-- [x] **Editable Titles** - Made album names editable in both stage 1 and stage 2  
-- [x] **Comprehensive Metadata** - Display photo counts, dates, locations, status
-- [x] **Interactive Cover Selection** - Choose cover photo from grid of options
-- [x] **Enhanced Album Editor** - Full editing interface with all metadata
-- [x] **Smart Caching** - Optimized thumbnail loading with LRU cache
-- [x] **Professional UI Layout** - Clean, organized interface design
+## 🟢 LOW - Performance & Enhancement
+
+### **NEW LOW PRIORITY ISSUES** 🚨
+
+12. **Inefficient Database Queries** 🆕
+    - `get_processed_asset_ids()` loads all asset IDs into memory
+    - **Impact**: High memory usage with large photo libraries
+    - **Fix**: Use database-side filtering or pagination
+
+13. **Redundant Thumbnail Requests** 🆕
+    - UI may request same thumbnail multiple times during rendering
+    - **Fix**: Implement request deduplication in caching layer
+
+14. **Missing Graceful Degradation** 🆕
+    - UI breaks if VLM service is unavailable
+    - **Fix**: Add graceful fallbacks and better error states
+
+15. **No Telemetry/Metrics** 🆕
+    - No visibility into system performance or usage patterns
+    - **Fix**: Add optional telemetry for clustering performance, VLM response times, etc.
+
+## 🔵 ENHANCEMENT - New Features
+
+### **ARCHITECTURAL IMPROVEMENTS** 🆕
+
+16. **Service Layer Testing** 🆕
+    - No unit tests for the new service architecture
+    - **Fix**: Add comprehensive test suite for services
+
+17. **Configuration Validation** 🆕
+    - No validation that config.yaml contains required fields
+    - **Fix**: Add schema validation with helpful error messages
+
+18. **Plugin Architecture for VLM Providers** 🆕
+    - Currently hardcoded to Ollama
+    - **Enhancement**: Abstract VLM interface to support multiple providers
+
+19. **Album Template System** 🆕
+    - Only basic title/description templates
+    - **Enhancement**: Rich template system with conditional logic
 
 ## Implementation Priority
 
-### Next Sprint (High Impact)
-- [ ] **Photo Preview Grid** - Show 3-5 representative photos in sidebar for quick assessment
-- [ ] **Date Range Display** - Show start/end dates for multi-day events  
-- [ ] **Quick Bulk Actions** - "Approve All", "Reject All" buttons for batch processing
-- [ ] **Confidence Scores** - Display clustering/AI confidence levels
-- [ ] **Keyboard Shortcuts** - Add hotkeys for approve/reject workflow (A/R keys)
-- [ ] **Duplicate Detection** - Flag potential duplicate albums from different clustering runs
-- [ ] **Enrichment Progress** - Real-time progress tracking for VLM analysis
-- [ ] **Batch Enrichment Queue** - Queue system for multiple enrichments with progress
+### **IMMEDIATE (This Week)**
+1. Fix SQL injection in schema migration (Critical Security)
+2. Implement thread-safe singleton pattern (Critical Safety)
+3. Add VLM request size validation (High Stability)
+4. Replace broad exception handling (High Robustness)
 
-### Future Enhancements  
-- [ ] Add comprehensive type hints
-- [ ] Smart sorting by confidence/quality scores
-- [ ] Keyboard shortcuts for fast approve/reject workflow
-- [ ] Export/import album decisions and metadata
+### **NEXT SPRINT (High Impact)**  
+5. Add explicit database transactions
+6. Implement process cleanup handlers
+7. Add comprehensive type hints
+8. Standardize error logging
+9. Simplify session state management
+
+### **FUTURE ENHANCEMENTS**
+10. Performance optimizations (database queries, caching)
+11. Service layer testing
+12. Configuration validation
+13. Plugin architecture for VLM providers
 
 ## Recently Completed ✅
 
@@ -139,32 +186,20 @@
 - Professional layout with improved navigation and controls
 - Real-time database updates for all editable fields
 
-**UI Behavior & State Management Fixes**
-- Fixed album switching issue - can now open any album from sidebar
-- Fixed delete all pending button with proper SQL query and feedback
-- Resolved text input interference with button clicks using callbacks
-- Improved state management consistency across all UI interactions
+**Service-Oriented Architecture (v2.0)**
+- Complete separation of business logic into service layer
+- Singleton pattern for consistent state management
+- Centralized configuration and logging system
+- Custom exception hierarchy for specific error handling
+- Clean separation between UI, orchestration, and business logic layers
 
-**Docker Environment & Subprocess Execution**
-- Fixed subprocess execution for Docker containerized environment
-- Enhanced error handling and debugging for process failures
-- Added comprehensive debug information panel
-- Improved process output capture and display for troubleshooting
-- Docker-friendly script execution with proper PYTHONPATH setup
+---
 
-**Album Switching & Loading State Management**
-- Fixed album view misbehavior when switching between albums
-- Implemented proper loading states with progress indicators
-- Added `switch_to_album()` function to prevent race conditions
-- Enhanced thumbnail loading with real-time progress feedback
-- Eliminated unnecessary reruns during photo selection
-- Added photo counts to "Review Additional Photos" section
-- Optimized weak asset selection with callback-based state management
+## Code Quality Metrics Target
+- [ ] 100% type hint coverage for public APIs
+- [ ] <5 broad exception handlers (`except Exception:`)
+- [ ] Zero hardcoded configuration values
+- [ ] All database operations in explicit transactions
+- [ ] 90%+ test coverage for service layer
 
-**Enrichment Workflow Fixes (Latest)**
-- Fixed enrichment behavior when album is currently open
-- Albums now remain visible in sidebar during enrichment with proper status
-- Added status-aware main album view with different interfaces per state
-- Enhanced enrichment feedback for currently viewed albums
-- Implemented proper handling of `pending_enrichment` → `enriching` → `pending` transitions
-- Added real-time status indicators combining database and process states
+The refactoring has significantly improved the architecture, but there are still some critical security and stability issues that need immediate attention, particularly around thread safety and SQL injection in the migration code.

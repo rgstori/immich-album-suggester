@@ -10,10 +10,14 @@ import json
 import logging
 from datetime import datetime
 from contextlib import contextmanager
+from typing import Any, Literal
 from .config_service import config
 from ..exceptions import DatabaseError
 
 logger = logging.getLogger(__name__)
+
+# Define a literal type for status strings for robust type checking.
+SuggestionStatus = Literal['pending', 'approved', 'rejected', 'enriching', 'enrichment_failed', 'pending_enrichment']
 
 class DatabaseService:
     def __init__(self):
@@ -23,7 +27,7 @@ class DatabaseService:
         self._init_db()
 
     @contextmanager
-    def get_connection(self):
+    def get_connection(self) -> sqlite3.Connection:
         """Provides a managed database connection."""
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
@@ -33,7 +37,7 @@ class DatabaseService:
             logger.error(f"SQLite database connection failed: {e}", exc_info=True)
             raise DatabaseError("Could not connect to the suggestions database.") from e
         finally:
-            if conn:
+            if 'conn' in locals() and conn:
                 conn.close()
 
     def _init_db(self):
@@ -85,7 +89,7 @@ class DatabaseService:
             logger.info(f"Schema migration: Adding column '{column}' to table '{table}'.")
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
-    def get_pending_suggestions(self) -> list[dict]:
+    def get_pending_suggestions(self) -> list[dict[str, Any]]:
         """Fetches all suggestions that require user action or processing."""
         query = """
             SELECT * FROM suggestions 
@@ -101,7 +105,7 @@ class DatabaseService:
             logger.error("Failed to fetch pending suggestions.", exc_info=True)
             raise DatabaseError("Could not retrieve pending suggestions.") from e
 
-    def get_suggestion_details(self, suggestion_id: int) -> dict | None:
+    def get_suggestion_details(self, suggestion_id: int) -> dict[str, Any] | None:
         """Fetches all data for a single suggestion by its ID."""
         if not isinstance(suggestion_id, int): return None
         try:
@@ -114,8 +118,20 @@ class DatabaseService:
             logger.error(f"Failed to fetch details for suggestion {suggestion_id}.", exc_info=True)
             raise DatabaseError(f"Could not retrieve suggestion {suggestion_id}.") from e
 
-    def store_initial_suggestion(self, candidate: dict, location: str | None) -> int:
-        """Stores a new album candidate found by the clustering pass."""
+    def store_initial_suggestion(self, candidate: dict[str, Any], location: str | None) -> int:
+        """
+        Stores a new album candidate found by the clustering pass.
+
+        Args:
+            candidate: A dictionary containing the clustered asset data.
+            location: The primary location name determined by the geocoder.
+
+        Returns:
+            The integer ID of the newly created suggestion record.
+        
+        Raises:
+            DatabaseError: If the suggestion could not be stored.
+        """
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -142,8 +158,14 @@ class DatabaseService:
             logger.error("Failed to store initial suggestion.", exc_info=True)
             raise DatabaseError("Could not store new suggestion.") from e
 
-    def update_suggestion_with_analysis(self, suggestion_id: int, analysis: dict):
-        """Updates a suggestion with VLM results and sets status to 'pending' review."""
+    def update_suggestion_with_analysis(self, suggestion_id: int, analysis: dict[str, Any]) -> None:
+        """
+        Updates a suggestion with VLM results and sets status to 'pending' for review.
+
+        Args:
+            suggestion_id: The ID of the suggestion to update.
+            analysis: A dictionary containing 'vlm_title', 'vlm_description', and 'cover_asset_id'.
+        """
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -163,8 +185,14 @@ class DatabaseService:
             logger.error(f"Failed to update suggestion {suggestion_id} with analysis.", exc_info=True)
             raise DatabaseError("Could not update suggestion with VLM results.") from e
 
-    def update_suggestion_status(self, suggestion_id: int, status: str):
-        """Updates only the status of a suggestion (e.g., 'approved', 'rejected')."""
+    def update_suggestion_status(self, suggestion_id: int, status: SuggestionStatus) -> None:
+        """
+        Updates only the status of a suggestion (e.g., 'approved', 'rejected').
+
+        Args:
+            suggestion_id: The ID of the suggestion to update.
+            status: The new status string. Must be one of the `SuggestionStatus` types.
+        """
         VALID_STATUSES = ['pending', 'approved', 'rejected', 'enriching', 'enrichment_failed', 'pending_enrichment']
         if status not in VALID_STATUSES:
             raise ValueError(f"Invalid status: {status}")
@@ -195,7 +223,7 @@ class DatabaseService:
             logger.error("Failed to get processed asset IDs.", exc_info=True)
             raise DatabaseError("Could not retrieve processed asset IDs.") from e
 
-    def log_to_db(self, level: str, message: str):
+    def log_to_db(self, level: str, message: str) -> None:
         """Writes a log entry to the SQLite database for the UI to display."""
         try:
             with self.get_connection() as conn:
@@ -207,7 +235,7 @@ class DatabaseService:
             # If we can't log to the DB, log the log message and the error to the file log.
             logger.error(f"Failed to write log to database. Original message: '{message}'", exc_info=True)
 
-    def get_scan_logs(self, last_id: int = 0) -> list[dict]:
+    def get_scan_logs(self, last_id: int = 0) -> list[dict[str, Any]]:
         """Fetches all scan log entries since a given ID."""
         try:
             with self.get_connection() as conn:

@@ -1,7 +1,7 @@
-# Architecture and Design Decisions: Immich Album Suggester
+# Architecture and Design Decisions: Immich Album Suggester v0.2
 
-**Version: 1.0**
-**Last Updated: 2025-08-12**
+**Version: 0.2**
+**Last Updated: 2025-08-13**
 
 ## 1. Project Overview
 
@@ -16,153 +16,158 @@ The primary goals are to:
 
 This document serves as the primary guide for development, maintenance, and future enhancements.
 
-## 2. Core Architectural Concept: The Decoupled Two-Pass System
+## 2. Core Architectural Concepts
 
-The application's architecture is built on a **decoupled, two-pass design**. This is a fundamental design decision made to maximize robustness, scalability, and user experience. The two core analytical processes—clustering and VLM enrichment—are treated as separate, asynchronous tasks coordinated by the UI and the central `suggestions.db`.
+The application is built on two fundamental principles: a **Decoupled Two-Pass System** and a **Service-Oriented Architecture**.
 
-*   **Pass 1: Clustering (`--mode` scan)**
-    *   **Goal:** To perform the CPU- and database-intensive work of finding potential albums.
-    *   **Process:** This pass connects to the Immich PostgreSQL database, fetches asset metadata and embeddings, performs the two-stage clustering, and stores the resulting raw candidates in the `suggestions.db` with a status of `pending_enrichment`.
-    *   **Characteristics:** This process is relatively fast and does not depend on external network services like the VLM.
+### 2.1. The Decoupled Two-Pass System
 
-*   **Pass 2: VLM Enrichment (`--enrich-id` scan)**
-    *   **Goal:** To perform the GPU- and network-intensive work of AI analysis.
-    *   **Process:** This pass is triggered from the UI for one or more specific suggestions. It fetches a suggestion's data from `suggestions.db`, downloads sample images via the Immich API, queries the VLM service, and updates the suggestion with the AI-generated title, description, and cover photo.
-    *   **Characteristics:** This process is slower and more prone to failure (due to network latency or VLM errors). Its separation prevents a VLM failure from halting the entire album discovery pipeline.
+The core analytical processes—clustering and VLM enrichment—are treated as separate, asynchronous tasks to maximize robustness and user experience.
+*   **Pass 1: Clustering (`--mode`):** A fast, CPU-intensive pass that finds potential albums by connecting to the Immich DB, running clustering algorithms, and storing raw candidates in the local `suggestions.db`.
+*   **Pass 2: VLM Enrichment (`--enrich-id`):** A slower, GPU/network-intensive pass that adds AI-generated metadata. It is triggered for specific candidates, preventing VLM failures from halting the entire discovery pipeline.
 
-This decoupling allows users to quickly find all potential events in their library and then choose which ones to invest computational resources in for AI analysis, either individually or in batches.
+### 2.2. Service-Oriented Architecture (v2.0)
+
+To enhance maintainability, testability, and clarity, the application's business logic is encapsulated within a dedicated **Service Layer**. High-level components like the UI (`ui.py`) and the backend engine (`app/main.py`) are lean orchestrators that delegate tasks to these services. This separation of concerns is the cornerstone of the v2.0 architecture.
 
 ## 3. System Architecture Diagram
+
+The diagram below illustrates the flow of control. The UI and Backend Engine do not interact directly with databases or external APIs; they communicate exclusively through the Application Services layer.
 
 ```mermaid
 graph TD
     subgraph "User Interface (Streamlit)"
-        UI[ui.py <br/> (Command Center)]
+        UI[ui.py <br/> (Presentation Layer)]
     end
 
-    subgraph "Backend Engine (Stateless Scripts)"
-        P1[main.py --mode <br/>(Clustering Pass)]
-        P2[main.py --enrich-id <br/>(Enrichment Pass)]
+    subgraph "Backend Engine (CLI)"
+        MAIN[main.py <br/> (Orchestration Layer)]
+    end
+    
+    subgraph "Application Services (Business Logic Layer)"
+        PS[ProcessService]
+        DS[DatabaseService]
+        IS[ImmichService]
+        CS[ConfigService]
     end
 
-    subgraph "Central State"
+    subgraph "Core Logic & Low-Level IO"
+        CLUST[clustering.py]
+        VLM_MOD[vlm.py]
+        IMM_DB[immich_db.py]
+        IMM_API[immich_api.py]
+    end
+
+    subgraph "Data & External Systems"
         DB_S[suggestions.db <br/> (SQLite)]
-    end
-
-    subgraph "External Systems"
         DB_I[Immich PostgreSQL DB]
         API_I[Immich API]
-        VLM[VLM Service (Ollama)]
+        VLM_SVC[VLM Service (Ollama)]
     end
 
-    %% User Actions
-    UI -- "1a. Start Clustering Scan" --> P1;
-    UI -- "1b. Start Enrichment" --> P2;
+    %% UI to Services Flow
+    UI -- "1. Calls start_scan()" --> PS;
+    UI -- "2. Calls get_pending_suggestions()" --> DS;
+    UI -- "3. Calls get_cached_thumbnail()" --> IS;
+    UI -- "4. Calls create_album()" --> IS;
+    
+    %% Process Service to Backend Flow
+    PS -- "Launches" --> MAIN;
+    
+    %% Backend to Services Flow
+    MAIN -- "Uses" --> DS;
+    MAIN -- "Uses" --> IS;
+    
+    %% Services to Low-Level Logic Flow
+    DS -- "Writes/Reads" --> DB_S;
+    IS -- "Uses for bulk reads" --> IMM_DB;
+    IS -- "Uses for writes/thumbnails" --> IMM_API;
+    IMM_DB -- "Reads from" --> DB_I;
+    IMM_API -- "Calls" --> API_I;
+    IS -- "Provides thumbnails to" --> VLM_MOD;
+    VLM_MOD -- "Calls" --> VLM_SVC;
+    MAIN -- "Uses" --> CLUST;
 
-    %% Pass 1: Clustering Flow
-    P1 -- "2. Fetch Asset IDs to Exclude" --> DB_S;
-    P1 -- "3. Fetch All Assets & Embeddings" --> DB_I;
-    P1 -- "4. Store Raw Candidates (status: 'pending_enrichment')" --> DB_S;
-
-    %% Pass 2: Enrichment Flow
-    P2 -- "5. Fetch Candidate Data" --> DB_S;
-    P2 -- "6. Download Thumbnails" --> API_I;
-    P2 -- "7. Get VLM Analysis" --> VLM;
-    P2 -- "8. Update Suggestion (status: 'pending')" --> DB_S;
-
-    %% UI Interaction with State and API
-    UI -- "Polls Logs & Suggestions" --> DB_S;
-    UI -- "User Approves Album" --> API_I;
-    UI -- "Updates Status (approved/rejected)" --> DB_S;
-    UI -- "Displays Thumbnails" --> API_I;
+    %% Global Config Access
+    UI --> CS;
+    MAIN --> CS;
+    DS --> CS;
+    IS --> CS;
 ```
 
-## 4. Component Breakdown
+## 4. Component Breakdown (v2.0)
 
-Each component has a distinct and focused responsibility.
+### 4.1. High-Level Layers
 
-*   **Web UI (`ui.py`)**
-    *   **Purpose:** The main entrypoint and control panel for the entire application.
-    *   **Responsibilities:**
-        *   Triggers background scans for both **Pass 1 (Clustering)** and **Pass 2 (Enrichment)**.
-        *   Manages concurrent processes, preventing multiple clustering scans and tracking individual enrichment tasks.
-        *   Provides a rich, sortable, and interactive list of all suggestions.
-        *   Displays live logs by polling the `scan_logs` table.
-        *   Features a cached, paginated gallery for fast browsing of suggestions.
-        *   Calls the Immich `write` API to create albums upon user approval.
+*   **`ui.py` (Presentation Layer):** A pure UI component. Its sole responsibility is to render Streamlit widgets and manage UI-specific state (`st.session_state`). It contains **no business logic** and delegates all actions (fetching data, starting processes, creating albums) to the service layer.
+*   **`app/main.py` (Orchestration Layer):** A lean, stateless command-line script. It parses arguments and orchestrates the execution of a clustering or enrichment pass by calling methods on the appropriate services.
 
-*   **Orchestrator (`app/main.py`)**
-    *   **Purpose:** A stateless command-line script that serves as the entrypoint for all backend processing.
-    *   **Responsibilities:** Parses command-line arguments (`--mode` or `--enrich-id`) to determine which pass to execute. It loads configuration and coordinates the other `app/` modules to perform the requested task.
+### 4.2. The Service Layer (`app/services/`)
 
-*   **Suggestions Database (`suggestions.db`)**
-    *   **Purpose:** The central state machine for the application, implemented as a simple SQLite database.
-    *   **Responsibilities:**
-        *   Persists album suggestions through their entire lifecycle.
-        *   Stores logs from backend processes for the UI to display.
-        *   Uses a `status` column (`pending_enrichment`, `enriching`, `pending`, `enrichment_failed`, `approved`, `rejected`) to track the precise state of each suggestion, enabling the robust, asynchronous workflow.
+This layer contains the application's core business logic, encapsulated in single-responsibility, singleton classes.
 
-*   **Immich DB Connector (`app/immich_db.py`)**
-    *   **Purpose:** Handles all `read-only` connections to the Immich PostgreSQL database.
-    *   **Responsibilities:** Fetches bulk asset data (metadata, embeddings) for the clustering pass and targeted EXIF data for the single-photo view in the UI. **Decision:** Direct database access is the only performant method for acquiring CLIP embeddings in bulk.
+*   **`ConfigService`:** The single source of truth for all configuration. It loads `config.yaml` and `.env` files and, critically, **initializes the application-wide logging system**, ensuring all modules produce consistent, timestamped logs.
+*   **`DatabaseService`:** The exclusive gateway to the local `suggestions.db`. All SQLite read/write operations are centralized here.
+*   **`ImmichService`:** A façade for all communication with the Immich system. It intelligently uses the direct PostgreSQL connection for bulk reads and the official API for writes and thumbnail downloads.
+*   **`ProcessService`:** Manages all background `subprocess` tasks. It provides a simple interface to start and monitor backend jobs, abstracting this complexity away from the UI.
 
-*   **Immich API Connector (`app/immich_api.py`)**
-    *   **Purpose:** Handles all interactions with the official Immich API.
-    *   **Responsibilities:** Creates albums, adds assets, sets cover photos, and—critically—downloads thumbnails for both VLM analysis and UI display.
+### 4.3. Core Logic & Low-Level IO
 
-*   **Clustering Service (`app/clustering.py`)**
-    *   **Purpose:** The analytical "brain" for identifying events.
-    *   **Responsibilities:** Implements the two-stage clustering process. It identifies "strong" core photos vs. "weak" peripheral photos by identifying articulation points in the cluster graph, a key feature for providing user choice.
+These modules contain specific algorithms or direct I/O logic and are called *by* the services.
 
-*   **VLM Service (`app/vlm.py`)**
-    *   **Purpose:** The interface to the generative AI model (Ollama).
-    *   **Responsibilities:** Prepares images and a structured prompt, sends the payload to the VLM, and resiliently parses the response. Includes a retry mechanism to handle transient network or model failures.
-
-*   **Geocoding Utility (`app/geocoding.py`)**
-    *   **Purpose:** A simple utility to add real-world location context.
-    *   **Responsibilities:** Converts GPS coordinates into a primary country name using an external API.
+*   **`app/clustering.py` & `app/geocoding.py`:** Contain the analytical algorithms for finding events and enriching them with location data.
+*   **`app/vlm.py`:** Logic for prompting the VLM and parsing its response. It now depends on `ImmichService` for obtaining images.
+*   **`app/immich_db.py` & `app/immich_api.py`:** Low-level modules for direct interaction with the Immich database and API, respectively.
+*   **`app/exceptions.py`:** Defines a hierarchy of custom exceptions, allowing for specific error handling and clearer classification of issues.
 
 ## 5. Data Flow & State Machine
 
-The lifecycle of a suggestion is managed by the `status` field in the `suggestions` table.
+The lifecycle of a suggestion is managed by the `status` field in the `suggestions` table. The state flow remains a core concept of the application.
 
-1.  **Creation:** A user starts an `incremental` or `full` scan from the UI. The `main.py --mode` script runs.
-2.  **`pending_enrichment`:** The clustering pass identifies a new event and stores it in the database. It is now visible in the UI, ready for AI analysis.
-3.  **Enrichment Trigger:** The user selects one or more suggestions in the UI and clicks "Enrich." The UI launches one or more `main.py --enrich-id` background processes.
-4.  **`enriching`:** The backend script immediately updates the suggestion's status to `enriching`. The UI sees this and displays enrichment progress, keeps the album visible in the sidebar, and shows appropriate status-specific controls.
-5.  **VLM Analysis:** The script communicates with the Immich API and the VLM.
-    *   **On Success:** The script updates the suggestion with the VLM's title and description and sets the status to **`pending`**. The suggestion is now fully enriched and ready for final user review.
-    *   **On Failure:** The script sets the status to **`enrichment_failed`**. The UI sees this and can display an error and a retry option.
-6.  **User Review (`pending` status):** The user inspects the album, includes/excludes "additional" photos, and makes a decision.
-    *   **On Approve:** The UI calls the Immich API to create the album and sets the status to **`approved`**. The suggestion is removed from the pending list.
-    *   **On Reject:** The UI sets the status to **`rejected`**. The suggestion is removed from the pending list.
+1.  **Creation:** A user starts a scan via the UI. The `ProcessService` launches `main.py --mode`, which uses `ImmichService` and `Clustering` to find a new event.
+2.  **`pending_enrichment`:** `DatabaseService` stores the new candidate with this status. It is now visible in the UI, ready for AI analysis.
+3.  **Enrichment Trigger:** The user selects a suggestion. The UI calls `ProcessService.start_enrichment()`.
+4.  **`enriching`:** The backend `main.py` script, via `DatabaseService`, immediately updates the status to `enriching`. The UI sees this and displays the updated status.
+5.  **VLM Analysis:** The script communicates with the VLM via the `vlm.py` module.
+    *   **On Success:** The script calls `DatabaseService.update_suggestion_with_analysis()`, which updates the title, description, and status to **`pending`**.
+    *   **On Failure:** The script (or a top-level exception handler) calls `DatabaseService.update_suggestion_status()` to set the status to **`enrichment_failed`**.
+6.  **User Review (`pending` status):** The user inspects the fully enriched album.
+    *   **On Approve:** The UI calls `ImmichService.create_album()` and then `DatabaseService.update_suggestion_status()` to set the status to **`approved`**.
+    *   **On Reject:** The UI calls `DatabaseService.update_suggestion_status()` to set the status to **`rejected`**.
 
 ## 6. Key Design Decisions & "Gotchas" Encountered
 
 This section documents critical decisions and learnings that shaped the final architecture.
 
-*   **System Architecture:**
-    *   **Decision:** A distributed system (UI/Engine on one machine, VLM on another, Immich on a third) communicating via IP addresses is proven and effective. The application is fully modularized into single-responsibility Python files.
-    *   **Decision:** The UI is the central command console. Scans are triggered from the UI, which then monitors background `subprocess` objects. This prevents concurrent runs at the source and is simpler than a database-level lock.
+### 6.1. v2.0 Architectural Decisions
+
+The v2.0 refactoring introduced a more mature and maintainable structure based on the following decisions:
+
+*   **Decision (Service-Oriented Architecture):** The primary decision was to abstract all business logic into a dedicated service layer (`app/services`). This was done to enforce separation of concerns, dramatically improving maintainability, testability, and code clarity.
+*   **Decision (Singleton Services):** A singleton pattern was used for services to ensure a single, consistent state and avoid re-initializing expensive resources like database connections or API clients on every call.
+*   **Decision (Centralized Logging):** The `ConfigService` establishes a root logger at startup. This ensures all parts of the application produce structured, timestamped logs to both the console and a file (`logs/app.log`), providing high visibility during development and for production monitoring.
+*   **Decision (Specific Exception Hierarchy):** A new `app/exceptions.py` file was created to define a hierarchy of custom exceptions. This allows for more granular error handling and prevents silent failures. Services raise specific errors (e.g., `VLMConnectionError`), which are caught and logged by the top-level orchestrators, providing both code clarity and detailed debugging information.
+
+### 6.2. Foundational "Gotchas" and Learnings (v1.0)
+
+These are the original key findings that remain fundamental to the application's design.
 
 *   **Database & API Interaction:**
-    *   **Gotcha (Postgres):** Direct, read-only PostgreSQL access is **the only viable method** for fetching bulk CLIP embeddings. The Immich API does not expose an endpoint for this.
-    *   **Gotcha (API Endpoints):** The correct thumbnail URL can vary between Immich versions (`/api/asset/thumbnail/{id}` vs. `/api/assets/{id}/thumbnail`). The API client must be robust and try multiple candidates.
+    *   **Gotcha (Postgres):** Direct, read-only PostgreSQL access is **the only viable method** for fetching bulk CLIP embeddings. The Immich API does not expose an endpoint for this. The `ImmichService` continues to use this method for performance.
+    *   **Gotcha (API Endpoints):** The correct thumbnail URL can vary between Immich versions (`/api/asset/thumbnail/{id}` vs. `/api/assets/{id}/thumbnail`). The `immich_api.py` module remains robust by trying multiple candidates.
     *   **Gotcha (Image Formats):** The Immich API often serves thumbnails as `WebP` regardless of `Accept` headers. The client must convert these images (e.g., to JPEG) in memory before sending them to the VLM, which may not support WebP.
 
 *   **VLM Resilience:**
-    *   **Gotcha (Prompt Engineering):** VLMs require highly-structured, non-conversational prompts to reliably return JSON. The exact prompt structure, including specifying the format (`format: "json"` in the API call) and explicitly defining the desired JSON schema in the text, is crucial. The prompt is externalized to `config.yaml` for easy tuning.
-    *   **Gotcha (Context Window):** VLM calls fail if the total size of the prompt and base64-encoded images exceeds the model's context window. The `num_ctx` parameter must be explicitly set in the Ollama API call.
-    *   **Decision:** The system must be resilient to VLM failures. This was achieved via the two-pass system, a retry mechanism in `vlm.py`, and flexible parsing of the VLM's response.
+    *   **Gotcha (Prompt Engineering):** VLMs require highly-structured, non-conversational prompts to reliably return JSON. This is handled in `vlm.py` and the prompt is externalized to `config.yaml` for easy tuning.
+    *   **Gotcha (Context Window):** VLM calls can fail if the total size of the prompt and base64-encoded images exceeds the model's context window. This is managed by setting the `num_ctx` parameter in the Ollama API call.
+    *   **Decision (Resilience):** The system must be resilient to VLM failures. This is achieved via the two-pass system, a robust retry mechanism in `vlm.py`, and flexible parsing of the VLM's response.
 
 *   **UI Performance & UX:**
-    *   **Decision:** To provide a smooth gallery experience, all thumbnails for a selected suggestion are pre-fetched and cached in memory using an LRU cache (50MB limit). This makes pagination and browsing instantaneous after an initial load.
-    *   **Gotcha (Image Orientation):** Mobile phone photos often contain EXIF orientation tags. Without processing these tags, images appear rotated in the UI. A helper function was implemented to read the orientation tag and correctly rotate the image before display.
-    *   **Decision:** The concept of "Weak Candidates" (photos from "bridge" eventlets) is presented to the user as "Additional Photos" to be more intuitive. This provides a powerful but easy-to-understand way for users to fine-tune album contents.
-    *   **Gotcha (Album Switching):** Streamlit's session state required careful management to prevent race conditions when switching between albums. A dedicated `switch_to_album()` function with loading states was implemented to ensure clean transitions.
-    *   **Gotcha (Enrichment State):** When enriching the currently viewed album, the UI needed to handle status transitions gracefully. The main view now shows different interfaces based on `pending_enrichment`, `enriching`, and `pending` statuses.
+    *   **Decision (Caching):** To provide a smooth gallery experience, thumbnails are aggressively cached. This makes pagination and browsing instantaneous after an initial load.
+    *   **Gotcha (Image Orientation):** Mobile phone photos often contain EXIF orientation tags. Without processing these tags, images appear rotated. A helper function correctly reads the orientation tag and rotates the image before display.
+    *   **Decision (Weak Candidates):** The concept of "Weak Candidates" (photos from "bridge" eventlets) is presented to the user as "Additional Photos" to be more intuitive, providing a powerful but easy-to-understand way to fine-tune album contents.
 
 *   **Configuration & Deployment:**
-    *   **Decision:** All tunable parameters, from clustering thresholds to VLM prompts and UI text, are externalized to `config.yaml`. This makes the Python code a stable logic layer that can be configured without code changes.
-    *   **Decision:** The entire application is containerized via a `Dockerfile` and `docker-compose.yml`, simplifying deployment and ensuring a consistent runtime environment. The `data/` directory is volume-mounted to persist the SQLite database across container restarts.
-    *   **Gotcha (Python Module Execution):** When running a script from within a package (like `app/main.py`), it is critical to use the `python -m <package>.<module>` syntax (e.g., `python -m app.main`). Running `python app/main.py` directly breaks Python's package context, causing `ImportError: attempted relative import with no known parent package` in sub-modules. The `ui.py` was updated to use `python -m ...` in its `subprocess` calls to ensure correct and robust execution of the backend engine in the Docker environment.
+    *   **Decision (Externalized Config):** All tunable parameters, from clustering thresholds to VLM prompts, are externalized to `config.yaml`.
+    *   **Decision (Containerization):** The entire application is containerized via `Dockerfile` and `docker-compose.yml`, simplifying deployment and ensuring a consistent runtime environment.
+    *   **Gotcha (Python Module Execution):** Running a script from within a package requires the `python -m <package>.<module>` syntax (e.g., `python -m app.main`). The `ProcessService` now correctly uses this syntax to ensure robust execution of the backend engine.

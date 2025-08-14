@@ -35,6 +35,15 @@ class ImmichService:
         """
         Fetches all asset metadata and embeddings required for clustering.
         This operation uses a direct, read-only PostgreSQL connection for performance.
+
+        Args:
+            excluded_ids: A list of asset IDs to exclude from the query.
+
+        Returns:
+            A pandas DataFrame containing the asset data.
+        
+        Raises:
+            ImmichDBError: If the database query fails.
         """
         logger.info(f"Fetching assets for clustering, excluding {len(excluded_ids)} IDs.")
         try:
@@ -53,7 +62,14 @@ class ImmichService:
         Downloads the thumbnail for a single asset via the Immich API.
         Returns image bytes or None if the download fails. This is designed to be
         resilient for UI display, where a missing thumbnail is not a fatal error.
+
+        Args:
+            asset_id: The ID of the asset to fetch.
+
+        Returns:
+            The image content as bytes, or None if download fails.
         """
+
         try:
             # The download_and_convert_image function has its own robust retry logic.
             return immich_api.download_and_convert_image(self.api_client, asset_id, config.yaml)
@@ -63,7 +79,15 @@ class ImmichService:
             return None
             
     def get_exif_data(self, asset_id: str) -> dict | None:
-        """Fetches EXIF data for a single asset via direct DB connection."""
+        """
+        Fetches EXIF data for a single asset via direct DB connection.
+
+        Args:
+            asset_id: The ID of the asset to fetch EXIF data for.
+
+        Returns:
+            A dictionary of EXIF data, or None if not found.
+        """
         logger.debug(f"Fetching EXIF for asset {asset_id}.")
         try:
             # get_exif_for_asset handles its own connection.
@@ -75,9 +99,18 @@ class ImmichService:
     def create_album(self, title: str, asset_ids: list[str], cover_asset_id: str, highlight_ids: list[str]) -> bool:
         """
         Creates a new album in Immich via its official API.
-        
+
+        Args:
+            title: The desired title of the new album.
+            asset_ids: A list of all asset IDs to include in the album.
+            cover_asset_id: The asset ID to be set as the album cover.
+            highlight_ids: A list of asset IDs to mark as favorites within the album.
+
         Returns:
             True on success, False on failure.
+        
+        Raises:
+            ImmichAPIError: If the API call fails unexpectedly.
         """
         logger.info(f"Attempting to create album '{title}' with {len(asset_ids)} assets in Immich.")
         try:
