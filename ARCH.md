@@ -1,7 +1,7 @@
-# Architecture and Design Decisions: Immich Album Suggester v0.2
+# Architecture and Design Decisions: Immich Album Suggester v2.1
 
-**Version: 0.2**
-**Last Updated: 2025-08-13**
+**Version: 2.1**  
+**Last Updated: 2025-08-14**
 
 ## 1. Project Overview
 
@@ -106,17 +106,17 @@ graph TD
 
 This layer contains the application's core business logic, encapsulated in single-responsibility, singleton classes.
 
-*   **`ConfigService`:** The single source of truth for all configuration. It loads `config.yaml` and `.env` files and, critically, **initializes the application-wide logging system**, ensuring all modules produce consistent, timestamped logs.
-*   **`DatabaseService`:** The exclusive gateway to the local `suggestions.db`. All SQLite read/write operations are centralized here.
+*   **`ConfigService`:** The single source of truth for all configuration. It loads `config.yaml` and `.env` files, **initializes the application-wide logging system**, and implements **thread-safe singleton pattern** to prevent race conditions in multi-threaded environments.
+*   **`DatabaseService`:** The exclusive gateway to the local `suggestions.db`. All SQLite read/write operations are centralized here with **SQL injection protection** using whitelist validation for schema operations.
 *   **`ImmichService`:** A façade for all communication with the Immich system. It intelligently uses the direct PostgreSQL connection for bulk reads and the official API for writes and thumbnail downloads.
-*   **`ProcessService`:** Manages all background `subprocess` tasks. It provides a simple interface to start and monitor backend jobs, abstracting this complexity away from the UI.
+*   **`ProcessService`:** Manages all background `subprocess` tasks with **graceful shutdown handling**. It provides signal handlers and cleanup mechanisms to prevent zombie processes during application termination.
 
 ### 4.3. Core Logic & Low-Level IO
 
 These modules contain specific algorithms or direct I/O logic and are called *by* the services.
 
 *   **`app/clustering.py` & `app/geocoding.py`:** Contain the analytical algorithms for finding events and enriching them with location data.
-*   **`app/vlm.py`:** Logic for prompting the VLM and parsing its response. It now depends on `ImmichService` for obtaining images.
+*   **`app/vlm.py`:** Logic for prompting the VLM and parsing its response. It now depends on `ImmichService` for obtaining images and includes **request size validation** to prevent VLM context window overflow.
 *   **`app/immich_db.py` & `app/immich_api.py`:** Low-level modules for direct interaction with the Immich database and API, respectively.
 *   **`app/exceptions.py`:** Defines a hierarchy of custom exceptions, allowing for specific error handling and clearer classification of issues.
 
@@ -148,7 +148,16 @@ The v2.0 refactoring introduced a more mature and maintainable structure based o
 *   **Decision (Centralized Logging):** The `ConfigService` establishes a root logger at startup. This ensures all parts of the application produce structured, timestamped logs to both the console and a file (`logs/app.log`), providing high visibility during development and for production monitoring.
 *   **Decision (Specific Exception Hierarchy):** A new `app/exceptions.py` file was created to define a hierarchy of custom exceptions. This allows for more granular error handling and prevents silent failures. Services raise specific errors (e.g., `VLMConnectionError`), which are caught and logged by the top-level orchestrators, providing both code clarity and detailed debugging information.
 
-### 6.2. Foundational "Gotchas" and Learnings (v1.0)
+### 6.2. v2.1 Security & Robustness Enhancements
+
+Version 2.1 focused on addressing critical security and stability issues discovered during architecture review:
+
+*   **Security (SQL Injection Prevention):** Implemented whitelist validation in `DatabaseService._add_column_if_not_exists()` to prevent SQL injection attacks during schema migrations. Only predefined table names, column names, and data types are permitted.
+*   **Security (Thread-Safe Singleton):** Enhanced `ConfigService` with double-checked locking pattern using `threading.Lock()` to prevent race conditions in multi-threaded environments that could lead to multiple instances or partial initialization.
+*   **Robustness (VLM Resource Protection):** Added comprehensive request size validation in `vlm.py` to prevent VLM context window overflow. Validates both total token count and individual image sizes (max 2MB base64) before sending requests.
+*   **Robustness (Process Cleanup):** Implemented graceful shutdown handling in `ProcessService` with signal handlers (`SIGTERM`, `SIGINT`) and `atexit` cleanup. Prevents zombie processes during application crashes or forced termination with 5-second graceful timeout before force kill.
+
+### 6.3. Foundational "Gotchas" and Learnings (v1.0)
 
 These are the original key findings that remain fundamental to the application's design.
 
@@ -159,8 +168,8 @@ These are the original key findings that remain fundamental to the application's
 
 *   **VLM Resilience:**
     *   **Gotcha (Prompt Engineering):** VLMs require highly-structured, non-conversational prompts to reliably return JSON. This is handled in `vlm.py` and the prompt is externalized to `config.yaml` for easy tuning.
-    *   **Gotcha (Context Window):** VLM calls can fail if the total size of the prompt and base64-encoded images exceeds the model's context window. This is managed by setting the `num_ctx` parameter in the Ollama API call.
-    *   **Decision (Resilience):** The system must be resilient to VLM failures. This is achieved via the two-pass system, a robust retry mechanism in `vlm.py`, and flexible parsing of the VLM's response.
+    *   **Gotcha (Context Window):** VLM calls can fail if the total size of the prompt and base64-encoded images exceeds the model's context window. This is now **proactively validated** with size estimation before requests are sent, preventing silent failures.
+    *   **Decision (Resilience):** The system must be resilient to VLM failures. This is achieved via the two-pass system, a robust retry mechanism in `vlm.py`, flexible parsing of the VLM's response, and comprehensive request validation.
 
 *   **UI Performance & UX:**
     *   **Decision (Caching):** To provide a smooth gallery experience, thumbnails are aggressively cached. This makes pagination and browsing instantaneous after an initial load.
