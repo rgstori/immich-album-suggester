@@ -8,6 +8,9 @@ or the Immich REST API (for writes and individual asset downloads).
 """
 import logging
 import pandas as pd
+import requests
+import time
+from typing import Set, List
 from .config_service import config
 from .. import immich_db, immich_api
 from ..exceptions import ImmichDBError, ImmichAPIError
@@ -24,6 +27,12 @@ class ImmichService:
                 'api_timeout_seconds': config.get('immich.api_timeout_seconds', 30)
             }
         }
+        
+        # Cache for album asset IDs to avoid hammering the API
+        self._album_assets_cache: Set[str] = set()
+        self._album_assets_cache_time: float = 0
+        self._cache_ttl_seconds = config.get('immich.album_cache_ttl_seconds', 300)  # 5 minutes default
+        
         try:
             self.api_client = immich_api.get_api_client(self._sdk_config)
             logger.info("Immich API client initialized successfully.")
@@ -141,10 +150,109 @@ class ImmichService:
             if not success:
                 # The underlying function prints detailed errors, but we log it here too.
                 logger.error(f"Call to create_immich_album for '{title}' returned False.")
+            else:
+                # Clear the album cache since we just created a new album
+                self.clear_album_cache()
+                logger.debug(f"Cleared album cache after creating album '{title}'")
             return success
         except Exception as e:
             logger.error(f"An unexpected exception occurred while creating album '{title}'.", exc_info=True)
             raise ImmichAPIError("An API call to create an album failed unexpectedly.") from e
+
+    def get_all_asset_ids_in_albums(self, force_refresh: bool = False) -> Set[str]:
+        """
+        Fetches all asset IDs that are currently in any Immich album.
+        
+        This method prevents the album suggester from creating duplicate albums
+        for photos that are already organized in manually created albums.
+        Results are cached for performance to avoid hammering the API.
+        
+        Args:
+            force_refresh: If True, bypasses cache and forces fresh API call
+            
+        Returns:
+            A set of asset IDs that are currently in albums
+            
+        Raises:
+            ImmichAPIError: If the API call fails
+        """
+        current_time = time.time()
+        
+        # Check cache validity
+        if (not force_refresh and 
+            self._album_assets_cache and 
+            (current_time - self._album_assets_cache_time) < self._cache_ttl_seconds):
+            logger.debug(f"Using cached album assets ({len(self._album_assets_cache)} assets)")
+            return self._album_assets_cache.copy()
+        
+        logger.info("Fetching all albums from Immich to build exclusion list")
+        
+        try:
+            # Use the same API base URL logic as the SDK client
+            from .. import immich_api
+            api_base_url = immich_api._build_api_base(config.immich_url)
+            api_key = config.immich_api_key
+            
+            headers = {
+                'x-api-key': api_key,
+                'Accept': 'application/json'
+            }
+            
+            # Use the /albums endpoint to get all albums
+            albums_url = f"{api_base_url}/albums"
+            timeout = self._sdk_config['immich']['api_timeout_seconds']
+            
+            response = requests.get(albums_url, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            
+            albums_data = response.json()
+            logger.info(f"Retrieved {len(albums_data)} albums from Immich")
+            
+            # Extract all unique asset IDs from all albums
+            asset_ids = set()
+            total_assets = 0
+            
+            for album in albums_data:
+                album_name = album.get('albumName', 'Unknown')
+                album_assets = album.get('assets', [])
+                
+                # Extract asset IDs from the assets array
+                for asset in album_assets:
+                    asset_id = asset.get('id')
+                    if asset_id:
+                        asset_ids.add(asset_id)
+                        total_assets += 1
+                
+                logger.debug(f"Album '{album_name}': {len(album_assets)} assets")
+            
+            logger.info(f"Found {len(asset_ids)} unique assets across {len(albums_data)} albums")
+            
+            # Update cache
+            self._album_assets_cache = asset_ids
+            self._album_assets_cache_time = current_time
+            
+            return asset_ids.copy()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch albums from Immich API: {e}", exc_info=True)
+            raise ImmichAPIError(f"Could not retrieve albums from Immich: {e}") from e
+        except (KeyError, ValueError) as e:
+            logger.error(f"Unexpected response format from albums API: {e}", exc_info=True)
+            raise ImmichAPIError(f"Invalid response format from albums API: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error while fetching album assets: {e}", exc_info=True)
+            raise ImmichAPIError(f"Unexpected error fetching album assets: {e}") from e
+
+    def clear_album_cache(self) -> None:
+        """
+        Clears the cached album asset IDs.
+        
+        This can be useful after creating new albums or when you want to ensure
+        fresh data on the next call to get_all_asset_ids_in_albums().
+        """
+        self._album_assets_cache.clear()
+        self._album_assets_cache_time = 0
+        logger.debug("Album assets cache cleared")
 
 # Singleton instance
 immich_service = ImmichService()

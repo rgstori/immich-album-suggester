@@ -17,6 +17,7 @@ postgres:
 immich:
   # Secrets like URL and API_KEY are loaded from .env, not stored here.
   api_timeout_seconds: 45 # Timeout for API calls like thumbnail downloads.
+  album_cache_ttl_seconds: 300 # Cache album data for 5 minutes to avoid API hammering
 
 vlm:
   enabled: true

@@ -154,6 +154,14 @@ def render_scan_controls():
         except AppServiceError as e:
             st.error(f"Failed to start scan: {e}")
 
+    # Album cache refresh button
+    if st.sidebar.button("🔄 Refresh Album Cache", use_container_width=True, help="Clear cached album data to detect new albums"):
+        try:
+            immich_service.clear_album_cache()
+            st.toast("Album cache cleared!", icon="🔄")
+        except Exception as e:
+            st.error(f"Failed to clear cache: {e}")
+
     # Display real-time logs from the database.
     with st.sidebar.expander("Live Logs", expanded=is_scan_running):
         log_container = st.container(height=config.get('ui.log_container_height', 200))

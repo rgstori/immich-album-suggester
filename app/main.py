@@ -51,6 +51,19 @@ def run_clustering_pass(mode: str):
     if mode == 'incremental':
         excluded_ids = db_service.get_processed_asset_ids()
         db_service.log_to_db("INFO", f"Found {len(excluded_ids)} previously processed assets to exclude.")
+    
+    # NEW: Fetch assets that are already in existing Immich albums to prevent duplicates
+    try:
+        existing_album_assets = immich_service.get_all_asset_ids_in_albums()
+        original_excluded_count = len(excluded_ids)
+        excluded_ids.extend(existing_album_assets)
+        # Remove duplicates while preserving order
+        excluded_ids = list(dict.fromkeys(excluded_ids))
+        db_service.log_to_db("INFO", f"Found {len(existing_album_assets)} assets in existing albums, {len(excluded_ids)} total excluded assets.")
+    except Exception as e:
+        # If fetching existing albums fails, log but continue (graceful degradation)
+        db_service.log_to_db("WARN", f"Could not fetch existing album assets: {e}. Continuing without album exclusion.")
+        logger.warning(f"Failed to fetch existing album assets: {e}", exc_info=True)
 
     # Use the ImmichService to fetch asset data.
     assets_df = immich_service.fetch_assets_for_clustering(excluded_ids)
