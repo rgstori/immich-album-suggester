@@ -4,124 +4,122 @@ Handles all interaction with the Vision Language Model (VLM).
 This module prepares images and context, sends them to the VLM service,
 and resiliently parses the response to extract album metadata.
 """
+# This future import is key to preventing NameErrors with type hints.
+# It makes Python treat type hints as strings, resolving them only when needed.
+from __future__ import annotations
+
 import base64
 import json
-import requests
-import sys
-import time # <-- Import the time module
-import traceback
-from app import immich_api
+import logging
 import re
+import time
+import requests
 
-class VLMError(Exception):
-    """Custom exception for VLM-related failures."""
-    pass
+# We need to import the type for our type hint.
+# This will be used by type checkers and IDEs.
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from app.services import ImmichService
+
+from app.exceptions import VLMConnectionError, VLMResponseError
+
+logger = logging.getLogger(__name__)
+
 
 def get_vlm_analysis(
-    api_client: immich_api.immich_python_sdk.ApiClient,
-    sample_asset_ids: list,
+    immich_service: "ImmichService",
+    sample_asset_ids: list[str],
     date_str: str,
     location_str: str | None,
     config: dict
 ) -> dict | None:
     """
     Orchestrates the VLM analysis process: downloads images, builds a prompt,
-    queries the VLM, and resiliently parses the nested JSON response.
+    queries the VLM, and resiliently parses the response.
+    
+    Args:
+        immich_service: The service used to download thumbnails.
+        sample_asset_ids: A list of asset IDs to use as a sample for analysis.
+        date_str: The formatted date string for context (e.g., "August 2025").
+        location_str: The location string for context.
+        config: The application's YAML configuration dictionary.
+        
+    Returns:
+        A dictionary with 'title', 'description', and 'cover_photo_index', or None on failure.
     """
-    print(f"    - [VLM] Analyzing {len(sample_asset_ids)} sample images...")
-    print(f"    - [VLM] Context -> Date: {date_str}, Location: {location_str or 'N/A'}")
+    logger.info(f"Starting VLM analysis for an event on {date_str} with {len(sample_asset_ids)} samples.")
     
     encoded_images = []
     for asset_id in sample_asset_ids:
-        # Use the robust image downloader from the immich_api module.
-        image_bytes = immich_api.download_and_convert_image(api_client, asset_id, config)
+        # Use the ImmichService to get thumbnails, abstracting away the API call.
+        image_bytes = immich_service.get_thumbnail_bytes(asset_id)
         if image_bytes:
             encoded_images.append(base64.b64encode(image_bytes).decode('utf-8'))
 
     if not encoded_images:
-        raise VLMError("No images could be prepared for analysis. Check Immich connectivity and asset status.")
+        logger.error("Could not prepare any images for VLM analysis. Aborting.")
+        raise VLMResponseError("No images could be downloaded or prepared for VLM analysis.")
 
-    cfg = config['vlm']
-    # This highly-structured prompt is crucial for getting reliable JSON output.
-
+    cfg_vlm = config.get('vlm', {})
     location_prompt = f"The event took place primarily in '{location_str}'." if location_str else "The event location is unknown."
     
-    # --- MODIFICATION: Use native chat template for Qwen/Instruct models ---
-    # This is a more robust way to provide instructions and context.
-    
-    # The system prompt sets the persona and overall rules.
-    system_prompt = """You are an automated photo album assistant. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json or any other conversational text."""
-
-    # The user prompt provides the specific data and the required JSON structure.
+    # Using the modern chat-based prompt structure for better model compliance.
+    system_prompt = "You are an automated photo album assistant. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json or any other conversational text."
     user_prompt = f"""
 CONTEXT: Event Date: '{date_str}'. {location_prompt}
-JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A one-paragraph summary of the event, people, and activities", "highlights": [int], "cover_photo_index": int}}
+JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A one-paragraph summary of the event, people, and activities", "cover_photo_index": int}}
 """
     
-    # The Ollama API supports a `messages` array for this purpose.
-    # Note: When using 'messages', we should use the '/api/chat' endpoint.
     payload = {
-        "model": cfg['model'],
+        "model": cfg_vlm.get('model'),
         "messages": [
-            { "role": "system", "content": system_prompt },
-            { 
-              "role": "user", 
-              "content": user_prompt,
-              "images": encoded_images # Attach images to the user message
-            }
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt, "images": encoded_images}
         ],
         "stream": False,
+        "options": {
+            "num_ctx": cfg_vlm.get('context_window')
+        }
     }
     
-    # Adjust the API endpoint to the standard for chat completions
-    api_url = cfg['api_url'].replace('/api/generate', '/api/chat')
-    
-    for attempt in range(cfg.get('retry_attempts', 1)):
+    api_url = cfg_vlm.get('api_url', '').replace('/api/generate', '/api/chat')
+    if not api_url:
+        logger.error("VLM API URL is not configured in config.yaml.")
+        raise VLMConnectionError("VLM API URL is missing.")
+
+    for attempt in range(cfg_vlm.get('retry_attempts', 3)):
         try:
-            # Use the new api_url
-            response = requests.post(api_url, json=payload, timeout=cfg['api_timeout_seconds'])
+            logger.debug(f"VLM attempt {attempt + 1}: POSTing to {api_url}")
+            response = requests.post(api_url, json=payload, timeout=cfg_vlm.get('api_timeout_seconds', 300))
             response.raise_for_status()
 
-            # The response structure for /api/chat is different.
-            # The JSON content is in response['message']['content'].
             response_data = response.json()
-            raw_response_field = response_data.get('message', {}).get('content', '')
+            raw_content = response_data.get('message', {}).get('content', '')
             
-            print(f"    - [VLM-DEBUG] Raw response field: {raw_response_field}", flush=True)
-            
-            # Our existing regex extractor is still perfect for this!
-            json_match = re.search(r'\{.*\}', raw_response_field, re.DOTALL)
-            
+            json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
             if not json_match:
-                raise VLMError("No JSON object found in the VLM response.")
+                raise VLMResponseError("No JSON object found in the VLM response.")
                 
-            vlm_data_string = json_match.group(0)
-            vlm_data = json.loads(vlm_data_string)
+            vlm_data = json.loads(json_match.group(0))
 
-            # Old check was just for key existence.
-            required_keys = ['title', 'description']
-            if not all(key in vlm_data for key in required_keys):
-                 raise VLMError(f"Response missed required keys. Got: {list(vlm_data.keys())}")
-
-            # NEW: Add a check for lazy placeholder values.
-            if vlm_data.get('title', '').lower() == 'string' or vlm_data.get('description', '').lower() == 'string':
-                raise VLMError(f"VLM returned a lazy placeholder response. Got: {vlm_data}")
+            # Validate response quality
+            if not all(key in vlm_data for key in ['title', 'description']):
+                 raise VLMResponseError(f"Response missed required keys. Got: {list(vlm_data.keys())}")
+            if not vlm_data.get('title') or not vlm_data.get('description'):
+                raise VLMResponseError(f"Response contained empty values. Got: {vlm_data}")
             
-            # Final check to ensure values are not empty.
-            if not all(vlm_data.get(key) for key in required_keys):
-                raise VLMError(f"Response contained empty but required values. Got: {vlm_data}")
-            # --- MODIFICATION END ---
-            
-            print(f"    - [VLM] Success. Generated Title: '{vlm_data['title']}'", flush=True)
-            return vlm_data # Success, exit the function
+            logger.info(f"VLM analysis successful. Generated Title: '{vlm_data['title']}'")
+            return vlm_data
 
-        except (requests.exceptions.RequestException, json.JSONDecodeError, VLMError) as e:
-            print(f"    - [VLM-WARN] Attempt {attempt + 1}/{cfg.get('retry_attempts', 1)} failed: {e}", file=sys.stderr, flush=True)
-            if attempt + 1 == cfg.get('retry_attempts', 1):
-                # If this was the last attempt, re-raise the exception to be caught by main.py
-                raise VLMError(f"VLM analysis failed after {cfg.get('retry_attempts', 1)} attempts. Last error: {e}") from e
-            # Wait before retrying
-            time.sleep(cfg.get('retry_delay_seconds', 5))
-        # If we get here, it means a retryable error occurred, and the loop will continue.
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"VLM connection error on attempt {attempt + 1}: {e}")
+            if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
+                raise VLMConnectionError("VLM analysis failed due to a network error after multiple retries.") from e
+        except (json.JSONDecodeError, VLMResponseError) as e:
+            logger.warning(f"VLM response error on attempt {attempt + 1}: {e}")
+            if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
+                raise VLMResponseError("VLM analysis failed due to an invalid response after multiple retries.") from e
+        
+        time.sleep(cfg_vlm.get('retry_delay_seconds', 5))
 
-    return None # Should not be reached, but as a fallback.
+    return None # Should only be reached if retries are exhausted

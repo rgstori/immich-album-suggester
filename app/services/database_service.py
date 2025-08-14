@@ -1,0 +1,222 @@
+# app/services/database_service.py
+"""
+Provides a service for all interactions with the local SQLite database.
+
+This class centralizes all SQL queries, making the application easier to
+maintain and test. It handles the lifecycle of suggestions and scan logs.
+"""
+import sqlite3
+import json
+import logging
+from datetime import datetime
+from contextlib import contextmanager
+from .config_service import config
+from ..exceptions import DatabaseError
+
+logger = logging.getLogger(__name__)
+
+class DatabaseService:
+    def __init__(self):
+        db_path = config.project_root / "data" / "suggestions.db"
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_path
+        self._init_db()
+
+    @contextmanager
+    def get_connection(self):
+        """Provides a managed database connection."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.row_factory = sqlite3.Row # Allows accessing columns by name
+            yield conn
+        except sqlite3.Error as e:
+            logger.error(f"SQLite database connection failed: {e}", exc_info=True)
+            raise DatabaseError("Could not connect to the suggestions database.") from e
+        finally:
+            if conn:
+                conn.close()
+
+    def _init_db(self):
+        """Initializes the database schema and performs any necessary migrations."""
+        logger.info(f"Initializing suggestions database at {self.db_path}")
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # Create main suggestions table
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS suggestions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    status TEXT NOT NULL DEFAULT 'pending_enrichment',
+                    created_at TIMESTAMP NOT NULL,
+                    event_start_date TIMESTAMP,
+                    location TEXT,
+                    vlm_title TEXT,
+                    vlm_description TEXT,
+                    strong_asset_ids_json TEXT,
+                    weak_asset_ids_json TEXT,
+                    cover_asset_id TEXT
+                )""")
+                
+                # Create logs table
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scan_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TIMESTAMP NOT NULL,
+                    level TEXT NOT NULL,
+                    message TEXT NOT NULL
+                )""")
+
+                # Simple, idempotent migration: Add columns if they don't exist.
+                # In a larger project, a more formal migration tool (like Alembic) would be used.
+                self._add_column_if_not_exists(cursor, 'suggestions', 'event_start_date', 'TIMESTAMP')
+                self._add_column_if_not_exists(cursor, 'suggestions', 'location', 'TEXT')
+
+                conn.commit()
+                logger.debug("Database schema initialized/verified.")
+        except Exception as e:
+            logger.critical("Failed to initialize database schema.", exc_info=True)
+            raise DatabaseError("Failed to initialize database schema.") from e
+
+    def _add_column_if_not_exists(self, cursor, table, column, col_type):
+        """A utility to safely add a column to a table."""
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = [row['name'] for row in cursor.fetchall()]
+        if column not in columns:
+            logger.info(f"Schema migration: Adding column '{column}' to table '{table}'.")
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
+    def get_pending_suggestions(self) -> list[dict]:
+        """Fetches all suggestions that require user action or processing."""
+        query = """
+            SELECT * FROM suggestions 
+            WHERE status IN ('pending', 'pending_enrichment', 'enriching', 'enrichment_failed')
+            ORDER BY created_at DESC
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query)
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error("Failed to fetch pending suggestions.", exc_info=True)
+            raise DatabaseError("Could not retrieve pending suggestions.") from e
+
+    def get_suggestion_details(self, suggestion_id: int) -> dict | None:
+        """Fetches all data for a single suggestion by its ID."""
+        if not isinstance(suggestion_id, int): return None
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Failed to fetch details for suggestion {suggestion_id}.", exc_info=True)
+            raise DatabaseError(f"Could not retrieve suggestion {suggestion_id}.") from e
+
+    def store_initial_suggestion(self, candidate: dict, location: str | None) -> int:
+        """Stores a new album candidate found by the clustering pass."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                all_ids = candidate.get('strong_asset_ids', []) + candidate.get('weak_asset_ids', [])
+                cursor.execute("""
+                INSERT INTO suggestions (status, created_at, event_start_date, location, vlm_title, vlm_description, strong_asset_ids_json, weak_asset_ids_json, cover_asset_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    'pending_enrichment',
+                    datetime.now(),
+                    candidate['min_date'].to_pydatetime(),
+                    location,
+                    config.get('defaults.title_template').format(date_str=candidate['min_date'].strftime('%B %Y')),
+                    config.get('defaults.description'),
+                    json.dumps(candidate.get('strong_asset_ids', [])),
+                    json.dumps(candidate.get('weak_asset_ids', [])),
+                    all_ids[0] if all_ids else None
+                ))
+                conn.commit()
+                new_id = cursor.lastrowid
+                logger.info(f"Stored new suggestion candidate with ID: {new_id}")
+                return new_id
+        except Exception as e:
+            logger.error("Failed to store initial suggestion.", exc_info=True)
+            raise DatabaseError("Could not store new suggestion.") from e
+
+    def update_suggestion_with_analysis(self, suggestion_id: int, analysis: dict):
+        """Updates a suggestion with VLM results and sets status to 'pending' review."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                UPDATE suggestions
+                SET status = 'pending', vlm_title = ?, vlm_description = ?, cover_asset_id = ?
+                WHERE id = ?
+                """, (
+                    analysis.get('vlm_title'),
+                    analysis.get('vlm_description'),
+                    analysis.get('cover_asset_id'),
+                    suggestion_id
+                ))
+                conn.commit()
+            logger.info(f"Successfully enriched suggestion {suggestion_id} with VLM analysis.")
+        except Exception as e:
+            logger.error(f"Failed to update suggestion {suggestion_id} with analysis.", exc_info=True)
+            raise DatabaseError("Could not update suggestion with VLM results.") from e
+
+    def update_suggestion_status(self, suggestion_id: int, status: str):
+        """Updates only the status of a suggestion (e.g., 'approved', 'rejected')."""
+        VALID_STATUSES = ['pending', 'approved', 'rejected', 'enriching', 'enrichment_failed', 'pending_enrichment']
+        if status not in VALID_STATUSES:
+            raise ValueError(f"Invalid status: {status}")
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE suggestions SET status = ? WHERE id = ?", (status, suggestion_id))
+                conn.commit()
+            logger.info(f"Updated status for suggestion {suggestion_id} to '{status}'.")
+        except Exception as e:
+            logger.error(f"Failed to update status for suggestion {suggestion_id}.", exc_info=True)
+            raise DatabaseError("Could not update suggestion status.") from e
+            
+    def get_processed_asset_ids(self) -> list[str]:
+        """Gets all asset IDs that are already part of any existing suggestion."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT strong_asset_ids_json, weak_asset_ids_json FROM suggestions")
+                rows = cursor.fetchall()
+                
+                processed_ids = set()
+                for strong_json, weak_json in rows:
+                    processed_ids.update(json.loads(strong_json or '[]'))
+                    processed_ids.update(json.loads(weak_json or '[]'))
+                return list(processed_ids)
+        except Exception as e:
+            logger.error("Failed to get processed asset IDs.", exc_info=True)
+            raise DatabaseError("Could not retrieve processed asset IDs.") from e
+
+    def log_to_db(self, level: str, message: str):
+        """Writes a log entry to the SQLite database for the UI to display."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT INTO scan_logs (timestamp, level, message) VALUES (?, ?, ?)", 
+                               (datetime.now(), level.upper(), message))
+                conn.commit()
+        except Exception as e:
+            # If we can't log to the DB, log the log message and the error to the file log.
+            logger.error(f"Failed to write log to database. Original message: '{message}'", exc_info=True)
+
+    def get_scan_logs(self, last_id: int = 0) -> list[dict]:
+        """Fetches all scan log entries since a given ID."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, level, message FROM scan_logs WHERE id > ? ORDER BY id ASC", (last_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error("Failed to fetch scan logs from database.", exc_info=True)
+            return [] # Return empty on failure to avoid breaking the UI
+
+# Singleton instance for easy access throughout the application.
+db_service = DatabaseService()
