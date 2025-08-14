@@ -10,7 +10,7 @@ import requests
 import sys
 import time # <-- Import the time module
 import traceback
-from . import immich_api
+from app import immich_api
 import re
 
 class VLMError(Exception):

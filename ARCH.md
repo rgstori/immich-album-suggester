@@ -129,7 +129,7 @@ The lifecycle of a suggestion is managed by the `status` field in the `suggestio
 1.  **Creation:** A user starts an `incremental` or `full` scan from the UI. The `main.py --mode` script runs.
 2.  **`pending_enrichment`:** The clustering pass identifies a new event and stores it in the database. It is now visible in the UI, ready for AI analysis.
 3.  **Enrichment Trigger:** The user selects one or more suggestions in the UI and clicks "Enrich." The UI launches one or more `main.py --enrich-id` background processes.
-4.  **`enriching`:** The backend script immediately updates the suggestion's status to `enriching`. The UI sees this and displays a persistent "Enriching..." message.
+4.  **`enriching`:** The backend script immediately updates the suggestion's status to `enriching`. The UI sees this and displays enrichment progress, keeps the album visible in the sidebar, and shows appropriate status-specific controls.
 5.  **VLM Analysis:** The script communicates with the Immich API and the VLM.
     *   **On Success:** The script updates the suggestion with the VLM's title and description and sets the status to **`pending`**. The suggestion is now fully enriched and ready for final user review.
     *   **On Failure:** The script sets the status to **`enrichment_failed`**. The UI sees this and can display an error and a retry option.
@@ -156,10 +156,13 @@ This section documents critical decisions and learnings that shaped the final ar
     *   **Decision:** The system must be resilient to VLM failures. This was achieved via the two-pass system, a retry mechanism in `vlm.py`, and flexible parsing of the VLM's response.
 
 *   **UI Performance & UX:**
-    *   **Decision:** To provide a smooth gallery experience, all thumbnails for a selected suggestion are pre-fetched and cached in memory using `@st.cache_data`. This makes pagination and browsing instantaneous after an initial load.
+    *   **Decision:** To provide a smooth gallery experience, all thumbnails for a selected suggestion are pre-fetched and cached in memory using an LRU cache (50MB limit). This makes pagination and browsing instantaneous after an initial load.
     *   **Gotcha (Image Orientation):** Mobile phone photos often contain EXIF orientation tags. Without processing these tags, images appear rotated in the UI. A helper function was implemented to read the orientation tag and correctly rotate the image before display.
     *   **Decision:** The concept of "Weak Candidates" (photos from "bridge" eventlets) is presented to the user as "Additional Photos" to be more intuitive. This provides a powerful but easy-to-understand way for users to fine-tune album contents.
+    *   **Gotcha (Album Switching):** Streamlit's session state required careful management to prevent race conditions when switching between albums. A dedicated `switch_to_album()` function with loading states was implemented to ensure clean transitions.
+    *   **Gotcha (Enrichment State):** When enriching the currently viewed album, the UI needed to handle status transitions gracefully. The main view now shows different interfaces based on `pending_enrichment`, `enriching`, and `pending` statuses.
 
 *   **Configuration & Deployment:**
     *   **Decision:** All tunable parameters, from clustering thresholds to VLM prompts and UI text, are externalized to `config.yaml`. This makes the Python code a stable logic layer that can be configured without code changes.
     *   **Decision:** The entire application is containerized via a `Dockerfile` and `docker-compose.yml`, simplifying deployment and ensuring a consistent runtime environment. The `data/` directory is volume-mounted to persist the SQLite database across container restarts.
+    *   **Gotcha (Python Module Execution):** When running a script from within a package (like `app/main.py`), it is critical to use the `python -m <package>.<module>` syntax (e.g., `python -m app.main`). Running `python app/main.py` directly breaks Python's package context, causing `ImportError: attempted relative import with no known parent package` in sub-modules. The `ui.py` was updated to use `python -m ...` in its `subprocess` calls to ensure correct and robust execution of the backend engine in the Docker environment.

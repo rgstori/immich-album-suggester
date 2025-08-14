@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # app/main.py
 """
 The main orchestrator for the album suggestion engine.
@@ -5,28 +6,86 @@ This script is triggered by the UI to run a scan. It coordinates all other
 modules to fetch data, perform clustering, get VLM analysis, and finally
 store the suggestions in the local SQLite database for the UI to display.
 """
-import argparse
-import sys
-import sqlite3
-import json
-import random
-import yaml
-import dotenv
-from datetime import datetime
-import os
-from pathlib import Path
-import traceback
-import pandas as pd
-import logging
+
+# Immediate debug output to catch early failures
+print("[DEBUG] Starting app/main.py script...", flush=True)
+
+try:
+    print("[DEBUG] Starting individual imports...", flush=True)
+    
+    print("[DEBUG] Importing argparse...", flush=True)
+    import argparse
+    print("[DEBUG] argparse OK", flush=True)
+    
+    print("[DEBUG] Importing sys...", flush=True)
+    import sys
+    print("[DEBUG] sys OK", flush=True)
+    
+    print("[DEBUG] Importing sqlite3...", flush=True)
+    import sqlite3
+    print("[DEBUG] sqlite3 OK", flush=True)
+    
+    print("[DEBUG] Importing json...", flush=True)
+    import json
+    print("[DEBUG] json OK", flush=True)
+    
+    print("[DEBUG] Importing random...", flush=True)
+    import random
+    print("[DEBUG] random OK", flush=True)
+    
+    print("[DEBUG] Importing yaml...", flush=True)
+    import yaml
+    print("[DEBUG] yaml OK", flush=True)
+    
+    print("[DEBUG] Importing dotenv...", flush=True)
+    import dotenv
+    print("[DEBUG] dotenv OK", flush=True)
+    
+    print("[DEBUG] Importing datetime...", flush=True)
+    from datetime import datetime
+    print("[DEBUG] datetime OK", flush=True)
+    
+    print("[DEBUG] Importing os...", flush=True)
+    import os
+    print("[DEBUG] os OK", flush=True)
+    
+    print("[DEBUG] Importing pathlib...", flush=True)
+    from pathlib import Path
+    print("[DEBUG] pathlib OK", flush=True)
+    
+    print("[DEBUG] Importing traceback...", flush=True)
+    import traceback
+    print("[DEBUG] traceback OK", flush=True)
+    
+    print("[DEBUG] Standard library imports successful", flush=True)
+        
+    print("[DEBUG] Importing logging...", flush=True)
+    import logging
+    print("[DEBUG] Logging import successful", flush=True)
+    
+except ImportError as e:
+    print(f"[DEBUG] FATAL: Failed to import modules: {e}", flush=True)
+    import sys
+    import traceback
+    print(f"[DEBUG] Full traceback: {traceback.format_exc()}", flush=True)
+    sys.exit(1)
+except Exception as e:
+    print(f"[DEBUG] FATAL: Unexpected error during imports: {e}", flush=True)
+    import sys
+    import traceback
+    print(f"[DEBUG] Full traceback: {traceback.format_exc()}", flush=True)
+    sys.exit(1)
 
 # Configure logging to avoid exposing sensitive data
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Import our application modules using relative paths
+print("[DEBUG] All imports completed, script loaded successfully", flush=True)
 
+# Import our application modules - handle both relative and direct execution
+print("[DEBUG] Starting application module imports...", flush=True)
 from . import immich_db, clustering, vlm, geocoding, immich_api
-
+print("[DEBUG] Application modules imported successfully.", flush=True)
 # --- DATABASE HELPERS for suggestions.db ---
 
 
@@ -232,27 +291,100 @@ def run_enrichment_pass(config: dict, suggestion_id: int):
 
 
 def main():
-    dotenv.load_dotenv()
-    parser = argparse.ArgumentParser(description="Immich Album Suggester Engine")
-    parser.add_argument('--mode', type=str, choices=['incremental', 'full'], help="Run clustering scan.")
-    parser.add_argument('--enrich-id', type=int, help="Run VLM enrichment on a specific suggestion ID.")
-    args = parser.parse_args()
+    # Print to stdout immediately to test basic script execution
+    print("[DEBUG] Album Suggester script starting...", flush=True)
+    
+    try:
+        # Initial logging to show the script is starting
+        print("[DEBUG] Configuring logger...", flush=True)
+        logger.info("=== Album Suggester Engine Starting ===")
+        logger.info(f"Python executable: {sys.executable}")
+        logger.info(f"Working directory: {os.getcwd()}")
+        logger.info(f"Script path: {__file__}")
+        print("[DEBUG] Logger configured, starting main logic...", flush=True)
+        
+        dotenv.load_dotenv()
+        logger.info("Environment variables loaded")
+        
+        parser = argparse.ArgumentParser(description="Immich Album Suggester Engine")
+        parser.add_argument('--mode', type=str, choices=['incremental', 'full'], help="Run clustering scan.")
+        parser.add_argument('--enrich-id', type=int, help="Run VLM enrichment on a specific suggestion ID.")
+        args = parser.parse_args()
+        logger.info(f"Arguments parsed: mode={args.mode}, enrich_id={args.enrich_id}")
 
-    # Ensure exactly one action is specified
-    if not args.mode and not args.enrich_id:
-        parser.error("No action requested. Please specify either --mode or --enrich-id.")
-    if args.mode and args.enrich_id:
-        parser.error("Ambiguous action. Please specify either --mode or --enrich-id, not both.")
+        # Ensure exactly one action is specified
+        if not args.mode and not args.enrich_id:
+            parser.error("No action requested. Please specify either --mode or --enrich-id.")
+        if args.mode and args.enrich_id:
+            parser.error("Ambiguous action. Please specify either --mode or --enrich-id, not both.")
 
-    with open('config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
+        # Try to load configuration
+        try:
+            config_path = PROJECT_ROOT / 'config.yaml'
+            logger.info(f"Loading config from: {config_path}")
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            logger.info("Configuration loaded successfully")
+        except FileNotFoundError as e:
+            logger.error(f"Config file not found: {e}")
+            log_to_db("ERROR", f"Config file not found: {e}")
+            sys.exit(1)
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            log_to_db("ERROR", f"Failed to load config: {e}")
+            sys.exit(1)
 
-    init_suggestions_db()
+        # Initialize database
+        try:
+            logger.info("Initializing suggestions database...")
+            init_suggestions_db()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            logger.error(f"Database path: {DB_PATH}")
+            # Can't log to DB if DB init failed, just use regular logging
+            sys.exit(1)
 
-    if args.mode:
-        run_clustering_pass(config, args.mode)
-    elif args.enrich_id:
-        run_enrichment_pass(config, args.enrich_id)
+        # Execute the requested action
+        if args.mode:
+            logger.info(f"Starting clustering pass in {args.mode} mode")
+                            
+            try:
+                # Log to both console and DB
+                log_to_db("INFO", f"=== Starting {args.mode} clustering scan ===")
+                run_clustering_pass(config, args.mode)
+                logger.info("Clustering pass completed successfully")
+                log_to_db("INFO", f"=== Clustering scan completed ===")
+            except Exception as e:
+                logger.error(f"Clustering pass failed: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                log_to_db("ERROR", f"Clustering pass failed: {e}")
+                sys.exit(1)
+                
+        elif args.enrich_id:
+            logger.info(f"Starting enrichment for suggestion {args.enrich_id}")
+            try:
+                log_to_db("INFO", f"=== Starting enrichment for suggestion {args.enrich_id} ===")
+                run_enrichment_pass(config, args.enrich_id)
+                logger.info(f"Enrichment for suggestion {args.enrich_id} completed successfully")
+                log_to_db("INFO", f"=== Enrichment for suggestion {args.enrich_id} completed ===")
+            except Exception as e:
+                logger.error(f"Enrichment failed: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                log_to_db("ERROR", f"Enrichment failed: {e}")
+                sys.exit(1)
+                
+        logger.info("=== Album Suggester Engine Finished ===")
+        
+    except Exception as e:
+        # Catch-all for any unhandled exceptions
+        logger.error(f"FATAL ERROR: Unhandled exception in main(): {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        try:
+            log_to_db("ERROR", f"FATAL ERROR: {e}")
+        except:
+            pass  # If we can't log to DB, at least we logged to console
+        sys.exit(1)
 
 
 if __name__ == "__main__":

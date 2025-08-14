@@ -37,11 +37,12 @@
    - Thread-safe cache with automatic eviction
    - Suggestion-specific cache clearing
 
-## 🟡 MEDIUM - User Experience Issues
+## 🟡 MEDIUM - User Experience Issues ✅ ALL COMPLETED
 
-8. **Album View Missing Metadata**
-   - Gallery view shows only images without photo metadata
-   - **Fix**: Add metadata overlay showing EXIF data for each photo in gallery
+8. **Album View Missing Metadata** ✅ COMPLETED
+   - Added comprehensive metadata display (photos, dates, locations, status)
+   - Implemented interactive cover photo selection
+   - Added editable titles and descriptions
 
 9. **Poor Error Messages** ✅ COMPLETED
    - Replaced generic "X" with informative error messages
@@ -52,6 +53,16 @@
     - Implemented selective cache invalidation by suggestion ID
     - LRU cache automatically manages memory usage
     - Only clears relevant caches instead of everything
+
+11. **Album Switching Issues** ✅ COMPLETED
+    - Fixed misbehavior when switching between albums
+    - Added proper loading states and progress indicators
+    - Eliminated race conditions with dedicated switching logic
+
+12. **Enrichment Workflow Problems** ✅ COMPLETED
+    - Fixed albums disappearing from sidebar during enrichment
+    - Added status-aware UI with appropriate controls per state
+    - Enhanced feedback when enriching currently viewed album
 
 ## 🟢 LOW - Code Quality & Maintenance
 
@@ -67,18 +78,34 @@
     - Some values still hardcoded despite config.yaml
     - **Fix**: Move remaining hardcoded values to configuration
 
+## NEW - Enhanced UI Features ✅ ALL COMPLETED
+
+### **Decision-Making Interface Improvements**
+- [x] **Thumbnail Previews** - Added preview images to suggestion list sidebar
+- [x] **Editable Titles** - Made album names editable in both stage 1 and stage 2  
+- [x] **Comprehensive Metadata** - Display photo counts, dates, locations, status
+- [x] **Interactive Cover Selection** - Choose cover photo from grid of options
+- [x] **Enhanced Album Editor** - Full editing interface with all metadata
+- [x] **Smart Caching** - Optimized thumbnail loading with LRU cache
+- [x] **Professional UI Layout** - Clean, organized interface design
+
 ## Implementation Priority
 
 ### Next Sprint (High Impact)
-- [ ] Fix database connection leaks (`immich_db.py`)
-- [ ] Add photo metadata display in album gallery view
-- [ ] Improve error messages for failed operations
+- [ ] **Photo Preview Grid** - Show 3-5 representative photos in sidebar for quick assessment
+- [ ] **Date Range Display** - Show start/end dates for multi-day events  
+- [ ] **Quick Bulk Actions** - "Approve All", "Reject All" buttons for batch processing
+- [ ] **Confidence Scores** - Display clustering/AI confidence levels
+- [ ] **Keyboard Shortcuts** - Add hotkeys for approve/reject workflow (A/R keys)
+- [ ] **Duplicate Detection** - Flag potential duplicate albums from different clustering runs
+- [ ] **Enrichment Progress** - Real-time progress tracking for VLM analysis
+- [ ] **Batch Enrichment Queue** - Queue system for multiple enrichments with progress
 
-### Future Enhancements
-- [ ] Implement LRU cache with size limits
+### Future Enhancements  
 - [ ] Add comprehensive type hints
-- [ ] Selective cache invalidation
-- [ ] Move hardcoded values to config
+- [ ] Smart sorting by confidence/quality scores
+- [ ] Keyboard shortcuts for fast approve/reject workflow
+- [ ] Export/import album decisions and metadata
 
 ## Recently Completed ✅
 
@@ -103,3 +130,41 @@
 - Informative error messages with retry functionality
 - Better thumbnail loading feedback
 - Improved error logging and debugging
+
+**Enhanced UI & Decision-Making Features**
+- Thumbnail previews in suggestion list for visual assessment
+- Editable album titles and descriptions in both stages
+- Interactive cover photo selection from grid interface
+- Comprehensive metadata display (photos, dates, locations, status)
+- Professional layout with improved navigation and controls
+- Real-time database updates for all editable fields
+
+**UI Behavior & State Management Fixes**
+- Fixed album switching issue - can now open any album from sidebar
+- Fixed delete all pending button with proper SQL query and feedback
+- Resolved text input interference with button clicks using callbacks
+- Improved state management consistency across all UI interactions
+
+**Docker Environment & Subprocess Execution**
+- Fixed subprocess execution for Docker containerized environment
+- Enhanced error handling and debugging for process failures
+- Added comprehensive debug information panel
+- Improved process output capture and display for troubleshooting
+- Docker-friendly script execution with proper PYTHONPATH setup
+
+**Album Switching & Loading State Management**
+- Fixed album view misbehavior when switching between albums
+- Implemented proper loading states with progress indicators
+- Added `switch_to_album()` function to prevent race conditions
+- Enhanced thumbnail loading with real-time progress feedback
+- Eliminated unnecessary reruns during photo selection
+- Added photo counts to "Review Additional Photos" section
+- Optimized weak asset selection with callback-based state management
+
+**Enrichment Workflow Fixes (Latest)**
+- Fixed enrichment behavior when album is currently open
+- Albums now remain visible in sidebar during enrichment with proper status
+- Added status-aware main album view with different interfaces per state
+- Enhanced enrichment feedback for currently viewed albums
+- Implemented proper handling of `pending_enrichment` → `enriching` → `pending` transitions
+- Added real-time status indicators combining database and process states
