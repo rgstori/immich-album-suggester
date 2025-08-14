@@ -212,3 +212,5 @@ __marimo__/
 CLAUDE.md
 /data
 /data
+/data
+data/suggestions.db
