@@ -16,30 +16,38 @@ import logging
 import sys
 from pathlib import Path
 import dotenv
+import threading
 
 class AppConfig:
     _instance = None
     _loaded = False
+    _lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:
-            cls._instance = super(AppConfig, cls).__new__(cls)
+            with cls._lock:
+                # Double-check pattern to prevent race conditions
+                if cls._instance is None:
+                    cls._instance = super(AppConfig, cls).__new__(cls)
         return cls._instance
 
     def __init__(self):
         # The __init__ might be called multiple times, but the loading logic
-        # is protected by the `_loaded` flag.
+        # is protected by the `_loaded` flag and thread lock.
         if not self._loaded:
-            # Load environment variables first, as they might be needed for config.
-            dotenv.load_dotenv()
-            self.project_root = Path(__file__).resolve().parents[2]
-            
-            self._load_yaml_config()
-            self._load_env_vars()
-            self._setup_logging()
-            
-            self._loaded = True
-            logging.info("Application configuration and logging initialized successfully.")
+            with self._lock:
+                # Double-check pattern inside lock
+                if not self._loaded:
+                    # Load environment variables first, as they might be needed for config.
+                    dotenv.load_dotenv()
+                    self.project_root = Path(__file__).resolve().parents[2]
+                    
+                    self._load_yaml_config()
+                    self._load_env_vars()
+                    self._setup_logging()
+                    
+                    self._loaded = True
+                    logging.info("Application configuration and logging initialized successfully.")
 
     def _load_yaml_config(self):
         """Loads the main config.yaml file."""

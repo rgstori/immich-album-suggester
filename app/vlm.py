@@ -70,6 +70,10 @@ CONTEXT: Event Date: '{date_str}'. {location_prompt}
 JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A one-paragraph summary of the event, people, and activities", "cover_photo_index": int}}
 """
     
+    # Validate total request size to prevent VLM context window overflow
+    max_context_size = cfg_vlm.get('context_window', 32768)  # Default Ollama context
+    _validate_vlm_request_size(encoded_images, system_prompt + user_prompt, max_context_size)
+    
     payload = {
         "model": cfg_vlm.get('model'),
         "messages": [
@@ -123,3 +127,47 @@ JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A
         time.sleep(cfg_vlm.get('retry_delay_seconds', 5))
 
     return None # Should only be reached if retries are exhausted
+
+
+def _validate_vlm_request_size(encoded_images: list[str], prompt_text: str, max_context_size: int) -> None:
+    """
+    Validates that the VLM request size doesn't exceed context window limits.
+    
+    Args:
+        encoded_images: List of base64-encoded image strings
+        prompt_text: Combined system and user prompt text
+        max_context_size: Maximum context window size in tokens
+        
+    Raises:
+        VLMResponseError: If request size exceeds limits
+    """
+    # Rough estimation: 1 token ≈ 4 characters for text, images vary greatly
+    # Base64 encoding increases size by ~33%, plus image processing overhead
+    
+    text_tokens = len(prompt_text) // 4  # Rough text token estimation
+    
+    # Estimate image tokens (very rough - actual depends on model and image size)
+    # Typical vision models use 100-1000 tokens per image depending on resolution
+    total_image_size = sum(len(img) for img in encoded_images)
+    estimated_image_tokens = len(encoded_images) * 500  # Conservative estimate
+    
+    total_estimated_tokens = text_tokens + estimated_image_tokens
+    
+    logger.debug(f"VLM request size validation: {len(encoded_images)} images, "
+                f"{len(prompt_text)} chars text, ~{total_estimated_tokens} tokens estimated")
+    
+    if total_estimated_tokens > max_context_size:
+        raise VLMResponseError(
+            f"VLM request too large: ~{total_estimated_tokens} tokens "
+            f"exceeds context window of {max_context_size} tokens. "
+            f"Reduce image count or use smaller images."
+        )
+    
+    # Also check for unreasonably large individual images (>2MB base64)
+    max_image_size = 2 * 1024 * 1024  # 2MB
+    for i, img in enumerate(encoded_images):
+        if len(img) > max_image_size:
+            raise VLMResponseError(
+                f"Image {i} is too large ({len(img)} chars base64). "
+                f"Maximum individual image size is {max_image_size} chars."
+            )

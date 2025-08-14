@@ -9,6 +9,8 @@ in a consistent and robust manner.
 import subprocess
 import sys
 import os
+import signal
+import atexit
 import logging
 from typing import Literal
 from .config_service import config
@@ -24,6 +26,9 @@ class ProcessService:
         # A dictionary to hold references to running Popen objects.
         # The key is a unique identifier (e.g., 'scan' or 'enrich_123').
         self.processes = {}
+        
+        # Register cleanup handlers for graceful shutdown
+        self._register_cleanup_handlers()
 
     def _get_base_command(self) -> list[str]:
         """Constructs the base command for running the backend script."""
@@ -112,6 +117,56 @@ class ProcessService:
         """Returns a list of keys for all currently running processes."""
         # This list comprehension also implicitly cleans up finished processes.
         return [key for key in list(self.processes.keys()) if self.is_running(key)]
+
+    def _register_cleanup_handlers(self) -> None:
+        """Register signal handlers and cleanup functions for graceful shutdown."""
+        # Register cleanup on normal program exit
+        atexit.register(self._cleanup_all_processes)
+        
+        # Register signal handlers for common termination signals
+        # Skip signal registration on Windows as it has limited signal support
+        if hasattr(signal, 'SIGTERM'):
+            signal.signal(signal.SIGTERM, self._signal_cleanup_handler)
+        if hasattr(signal, 'SIGINT'):
+            signal.signal(signal.SIGINT, self._signal_cleanup_handler)
+    
+    def _signal_cleanup_handler(self, signum: int, frame) -> None:
+        """Signal handler that performs cleanup and exits gracefully."""
+        logger.info(f"Received signal {signum}, cleaning up processes...")
+        self._cleanup_all_processes()
+        sys.exit(0)
+    
+    def _cleanup_all_processes(self) -> None:
+        """Terminate all running processes gracefully."""
+        if not self.processes:
+            return
+        
+        logger.info(f"Cleaning up {len(self.processes)} background processes...")
+        
+        for process_key, process in self.processes.items():
+            try:
+                if process.poll() is None:  # Process is still running
+                    logger.info(f"Terminating process '{process_key}' (PID: {process.pid})")
+                    
+                    # Try graceful termination first
+                    process.terminate()
+                    
+                    # Wait up to 5 seconds for graceful shutdown
+                    try:
+                        process.wait(timeout=5)
+                        logger.debug(f"Process '{process_key}' terminated gracefully")
+                    except subprocess.TimeoutExpired:
+                        # Force kill if graceful termination fails
+                        logger.warning(f"Process '{process_key}' did not terminate gracefully, force killing...")
+                        process.kill()
+                        process.wait()  # Wait for the kill to complete
+                        
+            except Exception as e:
+                logger.error(f"Error cleaning up process '{process_key}': {e}")
+        
+        # Clear the processes dictionary
+        self.processes.clear()
+        logger.info("Process cleanup completed")
 
 # Singleton instance
 process_service = ProcessService()

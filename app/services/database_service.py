@@ -83,6 +83,18 @@ class DatabaseService:
 
     def _add_column_if_not_exists(self, cursor, table, column, col_type):
         """A utility to safely add a column to a table."""
+        # Whitelist valid table and column names to prevent SQL injection
+        valid_tables = ['suggestions', 'scan_logs']
+        valid_columns = ['event_start_date', 'location']
+        valid_types = ['TIMESTAMP', 'TEXT', 'INTEGER', 'REAL', 'BLOB']
+        
+        if table not in valid_tables:
+            raise ValueError(f"Invalid table name: {table}")
+        if column not in valid_columns:
+            raise ValueError(f"Invalid column name: {column}")
+        if col_type not in valid_types:
+            raise ValueError(f"Invalid column type: {col_type}")
+        
         cursor.execute(f"PRAGMA table_info({table})")
         columns = [row['name'] for row in cursor.fetchall()]
         if column not in columns:

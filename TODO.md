@@ -33,23 +33,12 @@
 
 ### **NEW HIGH PRIORITY ISSUES** 🚨
 
-4. **Broad Exception Handling Masking Errors** 🆕
-   - Multiple locations catch `Exception` instead of specific types
-   - **Risk**: Hides bugs and makes debugging difficult
-   - **Locations**: `vlm.py:134`, `database_service.py:184`, `immich_service.py:67`
-   - **Fix**: Use specific exception types from `app.exceptions`
-
-5. **Database Transaction Atomicity** 🆕
-   - `store_initial_suggestion()` and `update_suggestion_with_analysis()` lack explicit transactions
-   - **Risk**: Partial updates if process crashes between operations  
-   - **Fix**: Wrap multi-operation methods in explicit transactions
-
-6. **Process Cleanup on Shutdown** 🆕
+4. **Process Cleanup on Shutdown** 🆕
    - `ProcessService` doesn't handle application shutdown cleanup
    - **Risk**: Zombie processes if main application crashes
    - **Fix**: Add signal handlers and cleanup methods
 
-7. **VLM Request Size Validation** 🆕
+5. **VLM Request Size Validation** 🆕
    - No validation that base64 images fit within VLM context window
    - **Risk**: VLM requests fail silently or unpredictably
    - **Fix**: Calculate total request size before sending
@@ -59,28 +48,30 @@
 - Database Connection Leaks ✅
 - Zombie Process Risk ✅
 - Unbounded Memory Cache ✅
+- Database Transaction Atomicity ✅
+- Broad Exception Handling in VLM ✅
 
 ## 🟡 MEDIUM - Code Quality & Maintainability
 
 ### **NEW MEDIUM PRIORITY ISSUES** 🚨
 
-8. **Incomplete Type Hints** 🆕
+6. **Incomplete Type Hints** 🆕
    - Many functions missing return type annotations
    - **Impact**: Reduces IDE support and type checking effectiveness
    - **Fix**: Add comprehensive type hints throughout codebase
    - **Priority locations**: `clustering.py`, `geocoding.py`, most service methods
 
-9. **Complex Session State Management** 🆕
+7. **Complex Session State Management** 🆕
    - `ui.py` has 8+ session state variables with complex interdependencies
    - **Impact**: Hard to debug UI state issues, prone to bugs
    - **Fix**: Create a session state management class with clear state transitions
 
-10. **Hardcoded Configuration Values** 🆕
+8. **Hardcoded Configuration Values** 🆕
     - Some values still hardcoded despite config.yaml existence
     - **Locations**: `ui.py` cache settings, `vlm.py` retry delays, `immich_api.py` URL patterns
     - **Fix**: Move all configuration to `config.yaml`
 
-11. **Inconsistent Error Logging** 🆕
+9. **Inconsistent Error Logging** 🆕
     - Some modules use `print()`, others use `logging`, some use both
     - **Impact**: Inconsistent log format and difficulty in production monitoring
     - **Fix**: Standardize on `logging` module throughout
@@ -96,20 +87,20 @@
 
 ### **NEW LOW PRIORITY ISSUES** 🚨
 
-12. **Inefficient Database Queries** 🆕
+10. **Inefficient Database Queries** 🆕
     - `get_processed_asset_ids()` loads all asset IDs into memory
     - **Impact**: High memory usage with large photo libraries
     - **Fix**: Use database-side filtering or pagination
 
-13. **Redundant Thumbnail Requests** 🆕
+11. **Redundant Thumbnail Requests** 🆕
     - UI may request same thumbnail multiple times during rendering
     - **Fix**: Implement request deduplication in caching layer
 
-14. **Missing Graceful Degradation** 🆕
+12. **Missing Graceful Degradation** 🆕
     - UI breaks if VLM service is unavailable
     - **Fix**: Add graceful fallbacks and better error states
 
-15. **No Telemetry/Metrics** 🆕
+13. **No Telemetry/Metrics** 🆕
     - No visibility into system performance or usage patterns
     - **Fix**: Add optional telemetry for clustering performance, VLM response times, etc.
 
@@ -117,19 +108,19 @@
 
 ### **ARCHITECTURAL IMPROVEMENTS** 🆕
 
-16. **Service Layer Testing** 🆕
+14. **Service Layer Testing** 🆕
     - No unit tests for the new service architecture
     - **Fix**: Add comprehensive test suite for services
 
-17. **Configuration Validation** 🆕
+15. **Configuration Validation** 🆕
     - No validation that config.yaml contains required fields
     - **Fix**: Add schema validation with helpful error messages
 
-18. **Plugin Architecture for VLM Providers** 🆕
+16. **Plugin Architecture for VLM Providers** 🆕
     - Currently hardcoded to Ollama
     - **Enhancement**: Abstract VLM interface to support multiple providers
 
-19. **Album Template System** 🆕
+17. **Album Template System** 🆕
     - Only basic title/description templates
     - **Enhancement**: Rich template system with conditional logic
 
@@ -139,20 +130,19 @@
 1. Fix SQL injection in schema migration (Critical Security)
 2. Implement thread-safe singleton pattern (Critical Safety)
 3. Add VLM request size validation (High Stability)
-4. Replace broad exception handling (High Robustness)
+4. Implement process cleanup handlers (High Stability)
 
 ### **NEXT SPRINT (High Impact)**  
-5. Add explicit database transactions
-6. Implement process cleanup handlers
-7. Add comprehensive type hints
-8. Standardize error logging
-9. Simplify session state management
+5. Add comprehensive type hints (Code Quality)
+6. Standardize error logging (Maintainability)
+7. Simplify session state management (Code Quality)
+8. Move hardcoded values to config (Maintainability)
 
 ### **FUTURE ENHANCEMENTS**
-10. Performance optimizations (database queries, caching)
-11. Service layer testing
-12. Configuration validation
-13. Plugin architecture for VLM providers
+9. Performance optimizations (database queries, caching)
+10. Service layer testing
+11. Configuration validation
+12. Plugin architecture for VLM providers
 
 ## Recently Completed ✅
 
