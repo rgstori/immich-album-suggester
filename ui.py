@@ -36,6 +36,8 @@ from app.services import db_service, immich_service, process_service
 from app.exceptions import AppServiceError
 # Import the centralized session state manager
 from app.ui_state import ui_state
+# Import DTOs for type-safe data handling
+from app.models import SuggestionAlbum
 
 # Initialize the logger for this UI module.
 logger = logging.getLogger(__name__)
@@ -357,15 +359,14 @@ def render_suggestion_list():
     with st.sidebar.container(height=600, border=False):
         # --- Render Individual Suggestion Cards ---
         for suggestion in suggestions:
-            s_id = suggestion['id']
-            is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion['status'] == 'enriching'
+            s_id = suggestion.id
+            is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion.status == 'enriching'
 
             with st.container(border=True):
                 # Use cover photo if available, otherwise first strong asset.
-                cover_id = suggestion.get('cover_asset_id')
+                cover_id = suggestion.cover_asset_id
                 if not cover_id:
-                    strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-                    cover_id = strong_ids[0] if strong_ids else None
+                    cover_id = suggestion.strong_asset_ids[0] if suggestion.strong_asset_ids else None
                 
                 thumb_bytes = get_cached_thumbnail(cover_id)
                 if thumb_bytes:
@@ -373,20 +374,17 @@ def render_suggestion_list():
                 else:
                     st.markdown("🖼️") # Fallback icon
 
-                st.text_input("Title", value=suggestion.get('vlm_title'), key=f"title_{s_id}", disabled=True)
+                st.text_input("Title", value=suggestion.vlm_title, key=f"title_{s_id}", disabled=True)
 
                 # Calculate photo counts
-                strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-                core_count = len(strong_ids)
+                core_count = len(suggestion.strong_asset_ids)
                 
-                if suggestion['status'] == 'from_immich':
+                if suggestion.status == 'from_immich':
                     # For existing albums, show additional assets from clustering
-                    additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
-                    additional_count = len(additional_assets)
+                    additional_count = len(suggestion.additional_asset_ids)
                 else:
                     # For new suggestions, show weak assets
-                    weak_ids = json.loads(suggestion.get('weak_asset_ids_json', '[]'))
-                    additional_count = len(weak_ids)
+                    additional_count = len(suggestion.weak_asset_ids)
                 
                 # Display photo count with additional photos format
                 if additional_count > 0:
@@ -443,7 +441,7 @@ def render_suggestion_list():
 
                 if is_enriching:
                     st.info("AI is analyzing...", icon="⏳")
-                elif suggestion['status'] == 'pending_enrichment':
+                elif suggestion.status == 'pending_enrichment':
                     action_col1, action_col2 = st.columns(2)
                     is_checked = s_id in ui_state.suggestions_to_enrich
                     action_col1.checkbox("Select", value=is_checked, key=f"cb_{s_id}", on_change=lambda sid=s_id: toggle_enrich_selection(sid))
@@ -470,7 +468,7 @@ def render_album_view(suggestion: dict):
     # Update title in database if changed
     if new_title != current_title and new_title.strip():
         try:
-            db_service.update_suggestion_title(suggestion['id'], new_title.strip())
+            db_service.update_suggestion_title(suggestion.id, new_title.strip())
             st.toast("Title updated!", icon="✅")
             st.rerun()
         except Exception as e:
@@ -480,7 +478,7 @@ def render_album_view(suggestion: dict):
     strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
     core_count = len(strong_ids)
     
-    if suggestion['status'] == 'from_immich':
+    if suggestion.status == 'from_immich':
         # For existing albums, show additional assets from clustering
         additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
         additional_count = len(additional_assets)
@@ -562,7 +560,7 @@ def render_album_view(suggestion: dict):
     st.divider()
 
     # --- Photo Galleries ---
-    if suggestion['status'] == 'from_immich':
+    if suggestion.status == 'from_immich':
         # For existing Immich albums, show existing photos and potential additions
         st.subheader(f"Current Album Photos ({len(strong_ids)})")
         render_photo_grid(strong_ids, suggestion.get('cover_asset_id'))
@@ -586,15 +584,15 @@ def render_album_view(suggestion: dict):
 
 def render_album_actions(suggestion: dict):
     """Renders the main action buttons for an album (Approve, Reject, etc.)."""
-    s_id = suggestion['id']
-    is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion['status'] == 'enriching'
+    s_id = suggestion.id
+    is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion.status == 'enriching'
 
     if is_enriching:
         st.info("This album is currently being analyzed by the AI. Please wait.", icon="⏳")
         return
 
     # Layout for action buttons
-    if suggestion['status'] == 'from_immich':
+    if suggestion.status == 'from_immich':
         # Special handling for existing Immich albums
         cols = st.columns(3)
         
@@ -620,7 +618,7 @@ def render_album_actions(suggestion: dict):
         cols = st.columns(4)
         
         # Approve Button - enable for both pending_enrichment and pending statuses
-        can_create_album = suggestion['status'] in ['pending', 'pending_enrichment']
+        can_create_album = suggestion.status in ['pending', 'pending_enrichment']
         if cols[0].button("✅ Create Album in Immich", type="primary", use_container_width=True, disabled=not can_create_album):
             handle_approve_action(suggestion)
 
@@ -629,7 +627,7 @@ def render_album_actions(suggestion: dict):
             handle_reject_action(s_id)
 
         # Enrich/Re-enrich Button
-        enrich_text = "✨ Re-run AI Analysis" if suggestion['status'] == 'pending' else "✨ Run AI Analysis"
+        enrich_text = "✨ Re-run AI Analysis" if suggestion.status == 'pending' else "✨ Run AI Analysis"
         if cols[2].button(enrich_text, use_container_width=True):
             process_service.start_enrichment(s_id)
             st.toast("Enrichment process started!", icon="✨")
@@ -649,15 +647,15 @@ def handle_approve_action(suggestion: dict):
             final_asset_ids = strong_assets + list(ui_state.included_weak_assets)
             
             success = immich_service.create_album(
-                title=suggestion['vlm_title'],
+                title=suggestion.vlm_title,
                 asset_ids=final_asset_ids,
-                cover_asset_id=suggestion['cover_asset_id'],
+                cover_asset_id=suggestion.cover_asset_id,
                 highlight_ids=[] # Highlight logic can be added later
             )
             
             if success:
-                db_service.update_suggestion_status(suggestion['id'], 'approved')
-                st.success(f"Album '{suggestion['vlm_title']}' created successfully in Immich!")
+                db_service.update_suggestion_status(suggestion.id, 'approved')
+                st.success(f"Album '{suggestion.vlm_title}' created successfully in Immich!")
                 ui_state.selected_suggestion_id = None
                 time.sleep(2) # Give user time to read the success message
                 st.rerun()
@@ -699,7 +697,7 @@ def handle_add_photos_action(suggestion: dict):
             success = add_assets_to_album(album_id, additional_assets)
             
             if success:
-                db_service.update_suggestion_status(suggestion['id'], 'approved')
+                db_service.update_suggestion_status(suggestion.id, 'approved')
                 st.success(f"Successfully added {len(additional_assets)} photos to album '{album_title}'!")
                 ui_state.selected_suggestion_id = None
                 time.sleep(2)
@@ -752,7 +750,7 @@ def handle_merge_suggestions(suggestion_ids: list[int]):
                 weak_ids = json.loads(suggestion.get('weak_asset_ids_json', '[]'))
                 total_photos += len(strong_ids) + len(weak_ids)
                 if suggestion.get('vlm_title'):
-                    titles.append(suggestion['vlm_title'])
+                    titles.append(suggestion.vlm_title)
             
             # Show confirmation dialog at the top of the page
             st.error("⚠️ **MERGE CONFIRMATION REQUIRED**")
@@ -1412,8 +1410,8 @@ def render_suggestions_table_view():
     
     # --- Table Rows ---
     for suggestion in suggestions:
-        s_id = suggestion['id']
-        is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion['status'] == 'enriching'
+        s_id = suggestion.id
+        is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion.status == 'enriching'
         
         cols = st.columns([0.5, 1, 2, 2, 1.5, 1.5, 1, 1])
         
@@ -1491,7 +1489,7 @@ def render_suggestions_table_view():
             strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
             core_count = len(strong_ids)
             
-            if suggestion['status'] == 'from_immich':
+            if suggestion.status == 'from_immich':
                 # For existing albums, show additional assets from clustering
                 additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
                 additional_count = len(additional_assets)
@@ -1514,7 +1512,7 @@ def render_suggestions_table_view():
         
         # Status
         with cols[6]:
-            status = suggestion['status']
+            status = suggestion.status
             status_emoji = {
                 'pending_enrichment': '⏳',
                 'enriching': '🔄',
@@ -1570,7 +1568,7 @@ def main():
         suggestion = db_service.get_suggestion_details(selected_id)
         if suggestion:
             # Check if enrichment process is running and add periodic refresh
-            is_enriching = process_service.is_running(f"enrich_{selected_id}") or suggestion['status'] == 'enriching'
+            is_enriching = process_service.is_running(f"enrich_{selected_id}") or suggestion.status == 'enriching'
             if is_enriching:
                 # Auto-refresh every 3 seconds while enrichment is running
                 time.sleep(3)

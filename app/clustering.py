@@ -10,6 +10,7 @@ from sklearn.cluster import DBSCAN
 import networkx as nx
 from scipy.spatial.distance import cosine
 import logging
+from .models import ClusteringCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,12 @@ def _preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     df['embedding_list'] = df['embedding'].apply(lambda x: np.fromstring(x.strip('[]'), sep=','))
     return df
 
-def find_album_candidates(df: pd.DataFrame, config: dict) -> list[dict]:
+def find_album_candidates(df: pd.DataFrame, config: dict) -> list[ClusteringCandidate]:
     """
     Orchestrates the entire two-stage clustering process.
 
     Returns:
-        A list of dictionaries, where each dictionary represents a potential
+        A list of ClusteringCandidate DTOs, each representing a potential
         album with its strong/weak assets and metadata.
     """
     if df.empty:
@@ -123,24 +124,26 @@ def find_album_candidates(df: pd.DataFrame, config: dict) -> list[dict]:
         gps_df = album_df.dropna(subset=['latitude', 'longitude'])
         gps_coords = list(zip(gps_df['latitude'], gps_df['longitude']))
         
-        final_albums.append({
-            "strong_asset_ids": strong_assets,
-            "weak_asset_ids": weak_assets,
-            "min_date": album_df['timestamp'].min(),
-            "max_date": album_df['timestamp'].max(),
-            "gps_coords": gps_coords,
-        })
+        final_albums.append(ClusteringCandidate(
+            strong_asset_ids=strong_assets,
+            weak_asset_ids=weak_assets,
+            min_date=album_df['timestamp'].min(),
+            max_date=album_df['timestamp'].max(),
+            primary_location=None,  # Will be set by geocoding later
+            confidence_score=None,  # Could be calculated from graph connectivity
+            gps_coords=gps_coords
+        ))
         
     return final_albums
 
 
-def find_potential_additions_to_albums(assets_df: pd.DataFrame, existing_albums: list[dict], config: dict) -> dict[str, list[str]]:
+def find_potential_additions_to_albums(assets_df: pd.DataFrame, existing_albums: list, config: dict) -> dict[str, list[str]]:
     """
     Finds photos that could potentially be added to existing Immich albums.
     
     Args:
         assets_df: DataFrame of all available assets (should NOT include assets already in albums)
-        existing_albums: List of existing album dictionaries with metadata
+        existing_albums: List of existing ImmichAlbum DTOs with metadata
         config: Configuration dictionary with clustering parameters
         
     Returns:
@@ -162,18 +165,18 @@ def find_potential_additions_to_albums(assets_df: pd.DataFrame, existing_albums:
     potential_additions = {}
     
     for album in existing_albums:
-        album_id = album['album_id']
-        album_title = album.get('title', 'Unknown Album')
+        album_id = album.album_id
+        album_title = album.title or 'Unknown Album'
         
         # Get album's asset IDs to fetch their embeddings/metadata
-        existing_asset_ids = set(album.get('asset_ids', []))
+        existing_asset_ids = set(album.asset_ids)
         if not existing_asset_ids:
             continue
             
         # Calculate album's characteristics from existing assets
-        album_start = album.get('start_date')
-        album_end = album.get('end_date')
-        album_location = album.get('location')
+        album_start = album.start_date
+        album_end = album.end_date
+        album_location = album.location
         
         if not album_start or not album_end:
             continue  # Skip albums without date information

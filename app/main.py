@@ -61,7 +61,7 @@ def run_clustering_pass(mode: str):
                 db_service.log_to_db("INFO", f"Removed {duplicate_count} duplicate Immich album suggestions.")
             
             # Clean up albums that no longer exist in Immich
-            current_album_ids = [album['album_id'] for album in existing_albums]
+            current_album_ids = [album.album_id for album in existing_albums]
             deleted_count = db_service.cleanup_deleted_immich_albums(current_album_ids)
             if deleted_count > 0:
                 db_service.log_to_db("INFO", f"Cleaned up {deleted_count} suggestions for deleted Immich albums.")
@@ -71,13 +71,13 @@ def run_clustering_pass(mode: str):
             for album in existing_albums:
                 try:
                     # Store the album as a suggestion (without potential additions for now)
-                    album['additional_asset_ids'] = []  # Will be populated later
-                    suggestion_id = db_service.store_immich_album_as_suggestion(album)
+                    album.additional_asset_ids = []  # Will be populated later
+                    suggestion_id = db_service.store_immich_album_as_suggestion(album.to_dict())
                     if suggestion_id:  # Only count if actually stored (not skipped duplicate)
                         stored_albums += 1
                 except Exception as e:
-                    db_service.log_to_db("ERROR", f"Failed to store album '{album.get('title', 'Unknown')}': {e}")
-                    logger.error(f"Failed to store album {album.get('title')}: {e}", exc_info=True)
+                    db_service.log_to_db("ERROR", f"Failed to store album '{album.title}': {e}")
+                    logger.error(f"Failed to store album {album.title}: {e}", exc_info=True)
             
             db_service.log_to_db("INFO", f"Processed {len(existing_albums)} existing albums ({stored_albums} new, {len(existing_albums) - stored_albums} existing).")
         else:
@@ -130,8 +130,8 @@ def run_clustering_pass(mode: str):
     # Store each new candidate in the database via the DatabaseService.
     for candidate in album_candidates:
         # Geocoding is part of the initial storage step.
-        location_str = geocoding.get_primary_location(candidate['gps_coords'])
-        db_service.store_initial_suggestion(candidate, location_str)
+        location_str = geocoding.get_primary_location(candidate.gps_coords)
+        db_service.store_initial_suggestion(candidate.to_dict(), location_str)
     
     # STEP 4: Find potential additions to existing albums (cross-album suggestions)
     # This happens after new album clustering to potentially suggest photos from new candidates
@@ -186,13 +186,10 @@ def run_enrichment_pass(suggestion_id: int):
         db_service.update_suggestion_status(suggestion_id, 'enrichment_failed')
         return
 
-    strong_ids = json.loads(candidate_data.get('strong_asset_ids_json', '[]'))
-    weak_ids = json.loads(candidate_data.get('weak_asset_ids_json', '[]'))
-    all_asset_ids = strong_ids + weak_ids
+    all_asset_ids = candidate_data.strong_asset_ids + candidate_data.weak_asset_ids
 
     # Prepare a default result object in case VLM is disabled or fails.
-    # Parse the date string back to datetime if needed
-    event_start_date = candidate_data.get('event_start_date')
+    event_start_date = candidate_data.event_start_date
     if event_start_date:
         if isinstance(event_start_date, str):
             # Parse string back to datetime (SQLite returns strings)
@@ -222,20 +219,19 @@ def run_enrichment_pass(suggestion_id: int):
             immich_service=immich_service,
             sample_asset_ids=sample_assets,
             date_str=event_date_str,
-            location_str=candidate_data.get('location'),
+            location_str=candidate_data.location,
             config=config.yaml
         )
         
-        if vlm_result:
+        if vlm_result.is_successful:
             # If VLM succeeds, update the final result with its output.
-            final_result['vlm_title'] = vlm_result.get('title', final_result['vlm_title'])
-            final_result['vlm_description'] = vlm_result.get('description', final_result['vlm_description'])
-            cover_index = vlm_result.get('cover_photo_index')
+            final_result['vlm_title'] = vlm_result.vlm_title or final_result['vlm_title']
+            final_result['vlm_description'] = vlm_result.vlm_description or final_result['vlm_description']
             
-            if isinstance(cover_index, int) and 0 <= cover_index < len(sample_assets):
-                final_result['cover_asset_id'] = sample_assets[cover_index]
+            if vlm_result.cover_asset_id:
+                final_result['cover_asset_id'] = vlm_result.cover_asset_id
         else:
-            db_service.log_to_db("WARN", f"[ID: {suggestion_id}] VLM analysis did not return a result. Using defaults.")
+            db_service.log_to_db("WARN", f"[ID: {suggestion_id}] VLM analysis failed: {vlm_result.error_message}. Using defaults.")
 
     # Update the suggestion in the DB with the final results (either from VLM or default).
     db_service.update_suggestion_with_analysis(suggestion_id, final_result)

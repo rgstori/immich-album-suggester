@@ -14,6 +14,7 @@ from typing import Set, List, Dict, Any
 from .config_service import config
 from .. import immich_db, immich_api
 from ..exceptions import ImmichDBError, ImmichAPIError
+from ..models import ImmichAlbum, album_from_api_response
 
 logger = logging.getLogger(__name__)
 
@@ -276,12 +277,12 @@ class ImmichService:
         self._album_assets_cache_time = 0
         logger.debug("Album assets cache cleared")
     
-    def get_albums_with_metadata(self) -> List[Dict[str, Any]]:
+    def get_albums_with_metadata(self) -> List[ImmichAlbum]:
         """
         Fetches all Immich albums with detailed metadata including dates, locations, and asset counts.
         
         Returns:
-            List of album dictionaries with detailed metadata for displaying alongside suggestions
+            List of ImmichAlbum DTOs with detailed metadata for displaying alongside suggestions
             
         Raises:
             ImmichAPIError: If the API calls fail
@@ -404,18 +405,18 @@ class ImmichService:
                 if not cover_asset_id and asset_ids:
                     cover_asset_id = asset_ids[0]
                 
-                detailed_album = {
-                    'album_id': album_id,
-                    'title': album_name,
-                    'description': album_description,
-                    'asset_ids': asset_ids,
-                    'asset_count': album.get('assetCount', len(asset_ids)),  # Use API field if available
-                    'start_date': start_date,
-                    'end_date': end_date,
-                    'location': location,
-                    'cover_asset_id': cover_asset_id,
-                    'additional_asset_ids': []  # Will be populated by clustering logic
-                }
+                detailed_album = ImmichAlbum(
+                    album_id=album_id,
+                    title=album_name,
+                    description=album_description,
+                    asset_ids=asset_ids,
+                    asset_count=album.get('assetCount', len(asset_ids)),  # Use API field if available
+                    start_date=start_date,
+                    end_date=end_date,
+                    location=location,
+                    cover_asset_id=cover_asset_id,
+                    additional_asset_ids=[]  # Will be populated by clustering logic
+                )
                 
                 detailed_albums.append(detailed_album)
                 logger.info(f"✓ Processed album '{album_name}': {len(asset_ids)} assets, dates {start_date} to {end_date}")

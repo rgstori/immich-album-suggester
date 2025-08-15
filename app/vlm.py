@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from app.services import ImmichService
 
 from app.exceptions import VLMConnectionError, VLMResponseError
+from app.models import VLMAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ def get_vlm_analysis(
     date_str: str,
     location_str: str | None,
     config: dict
-) -> dict | None:
+) -> VLMAnalysis:
     """
     Orchestrates the VLM analysis process: downloads images, builds a prompt,
     queries the VLM, and resiliently parses the response.
@@ -45,12 +46,14 @@ def get_vlm_analysis(
         config: The application's YAML configuration dictionary.
         
     Returns:
-        A dictionary with 'title', 'description', and 'cover_photo_index', or None on failure.
+        A VLMAnalysis DTO with results or error information.
     """
+    start_time = time.time()
     logger.info(f"Starting VLM analysis for an event on {date_str} with {len(sample_asset_ids)} samples.")
     
-    encoded_images = []
-    for asset_id in sample_asset_ids:
+    try:
+        encoded_images = []
+        for asset_id in sample_asset_ids:
         # Use the ImmichService to get thumbnails, abstracting away the API call.
         image_bytes = immich_service.get_thumbnail_bytes(asset_id)
         if image_bytes:
@@ -113,20 +116,48 @@ JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A
                 raise VLMResponseError(f"Response contained empty values. Got: {vlm_data}")
             
             logger.info(f"VLM analysis successful. Generated Title: '{vlm_data['title']}'")
-            return vlm_data
+            processing_time = time.time() - start_time
+            
+            # Extract cover photo index if provided
+            cover_asset_id = None
+            if 'cover_photo_index' in vlm_data and isinstance(vlm_data['cover_photo_index'], int):
+                cover_index = vlm_data['cover_photo_index']
+                if 0 <= cover_index < len(sample_asset_ids):
+                    cover_asset_id = sample_asset_ids[cover_index]
+                    
+            return VLMAnalysis(
+                vlm_title=vlm_data.get('title'),
+                vlm_description=vlm_data.get('description'),
+                cover_asset_id=cover_asset_id,
+                confidence_score=vlm_data.get('confidence_score'),
+                processing_time_seconds=processing_time
+            )
 
         except requests.exceptions.RequestException as e:
             logger.warning(f"VLM connection error on attempt {attempt + 1}: {e}")
             if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
-                raise VLMConnectionError("VLM analysis failed due to a network error after multiple retries.") from e
+                error_msg = f"VLM analysis failed due to network error after {cfg_vlm.get('retry_attempts', 3)} attempts"
+                logger.error(error_msg)
+                return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
         except (json.JSONDecodeError, VLMResponseError) as e:
             logger.warning(f"VLM response error on attempt {attempt + 1}: {e}")
             if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
-                raise VLMResponseError("VLM analysis failed due to an invalid response after multiple retries.") from e
+                error_msg = f"VLM analysis failed due to invalid response after {cfg_vlm.get('retry_attempts', 3)} attempts: {e}"
+                logger.error(error_msg)
+                return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
         
-        time.sleep(cfg_vlm.get('retry_delay_seconds', 5))
+            time.sleep(cfg_vlm.get('retry_delay_seconds', 5))
 
-    return None # Should only be reached if retries are exhausted
+        # If we reach here, all retries are exhausted without success
+        error_msg = f"VLM analysis failed after {cfg_vlm.get('retry_attempts', 3)} attempts"
+        logger.error(error_msg)
+        return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
+        
+    except Exception as e:
+        # Catch any other unexpected errors (e.g., image download failures)
+        error_msg = f"VLM analysis failed due to unexpected error: {e}"
+        logger.error(error_msg, exc_info=True)
+        return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
 
 
 def _validate_vlm_request_size(encoded_images: list[str], prompt_text: str, max_context_size: int) -> None:

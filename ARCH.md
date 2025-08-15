@@ -182,7 +182,76 @@ These are the original key findings that remain fundamental to the application's
     *   **Decision (Containerization):** The entire application is containerized via `Dockerfile` and `docker-compose.yml`, simplifying deployment and ensuring a consistent runtime environment.
     *   **Gotcha (Python Module Execution):** Running a script from within a package requires the `python -m <package>.<module>` syntax (e.g., `python -m app.main`). The `ProcessService` now correctly uses this syntax to ensure robust execution of the backend engine.
 
-## 7. v2.2 UI Architecture & User Experience Enhancements
+## 7. v2.3 Data Transfer Objects (DTOs) Architecture
+
+Version 2.3 introduced a comprehensive Data Transfer Object (DTO) system to replace error-prone dictionary-based data handling throughout the application.
+
+### 7.1. DTO System Design
+
+*   **Problem Statement:** The application heavily relied on `Dict[str, Any]` for data entities, leading to:
+    *   **Runtime Errors:** Typo-prone dictionary key access (e.g., `suggestion['vlm_titl']` vs `suggestion['vlm_title']`)
+    *   **Poor IDE Support:** No auto-completion, refactoring support, or compile-time validation
+    *   **Maintenance Burden:** Difficult static analysis and code understanding
+    *   **Performance Issues:** Repeated JSON parsing operations
+
+*   **Solution Architecture:** Implemented strongly-typed dataclasses with:
+    *   **Type Safety:** Full type annotations with proper IDE support
+    *   **Data Validation:** Centralized parsing and validation logic
+    *   **Conversion Utilities:** Bidirectional conversion between DTOs and dictionaries/database rows
+    *   **Backward Compatibility:** Gradual migration path without breaking existing functionality
+
+### 7.2. Core DTO Entities
+
+*   **`SuggestionAlbum`** (`app/models/dto.py`): Complete album suggestion with metadata
+    *   Properties: `id`, `status`, `vlm_title`, `strong_asset_ids`, `weak_asset_ids`, `cover_asset_id`, etc.
+    *   Business Logic: `is_from_immich`, `needs_enrichment`, `has_additions`, `total_asset_count`
+    *   Conversions: `to_dict()`, `from_dict()`, `from_clustering_candidate()`
+
+*   **`ImmichAlbum`**: Albums from Immich API with metadata extraction
+    *   Properties: `album_id`, `title`, `asset_ids`, `start_date`, `end_date`, `location`
+    *   Conversion: `to_suggestion_album()` for unified handling
+
+*   **`VLMAnalysis`**: Vision Language Model results with error handling
+    *   Properties: `vlm_title`, `vlm_description`, `cover_asset_id`, `error_message`
+    *   Validation: `is_successful` property for robust error handling
+
+*   **`ClusteringCandidate`**: Type-safe clustering algorithm results
+    *   Properties: `strong_asset_ids`, `weak_asset_ids`, `min_date`, `max_date`, `gps_coords`
+    *   Business Logic: `all_asset_ids`, `asset_count`
+
+*   **`PhotoAsset`**: Individual photo metadata with EXIF data
+    *   Properties: `id`, `file_created_at`, `latitude`, `longitude`, `city`, `state`, `country`
+    *   Computed Properties: `location`, `primary_date`
+
+### 7.3. Integration Points
+
+*   **Database Layer** (`app/services/database_service.py`):
+    *   `get_pending_suggestions()` → `List[SuggestionAlbum]`
+    *   `get_suggestion_details()` → `Optional[SuggestionAlbum]`
+    *   New methods: `store_suggestion_from_dto()`, `update_suggestion_from_dto()`
+
+*   **Clustering Pipeline** (`app/clustering.py`):
+    *   `find_album_candidates()` → `List[ClusteringCandidate]`
+    *   Type-safe data flow from clustering to storage
+
+*   **VLM Integration** (`app/vlm.py`):
+    *   `get_vlm_analysis()` → `VLMAnalysis`
+    *   Comprehensive error handling with detailed error messages
+
+*   **Immich Service** (`app/services/immich_service.py`):
+    *   `get_albums_with_metadata()` → `List[ImmichAlbum]`
+    *   Type-safe album metadata extraction
+
+### 7.4. Benefits Achieved
+
+*   **🛡️ Type Safety:** Compile-time error detection and IDE validation
+*   **🔧 Developer Experience:** Auto-completion, refactoring support, and code navigation
+*   **📖 Self-Documenting:** Clear data structures with explicit field types and docstrings
+*   **🐛 Error Reduction:** Eliminated typo-prone dictionary key access patterns
+*   **🚀 Performance:** Reduced JSON parsing overhead through intelligent caching
+*   **🏗️ Maintainability:** Centralized data model definitions simplify changes
+
+## 8. v2.2 UI Architecture & User Experience Enhancements
 
 Version 2.2 introduced significant improvements to the user interface architecture and user experience, focusing on better use of screen real estate and enhanced workflow management.
 

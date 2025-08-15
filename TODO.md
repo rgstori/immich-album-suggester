@@ -16,26 +16,50 @@ These items focus on making the application more robust and the user's actions m
 
 All high priority stability and user trust issues have been resolved.
 
-3. **Inefficient get_processed_asset_ids Query** 🔄 **ELEVATED FROM LOW**
-   - **Problem**: Loads all asset IDs from all suggestions into memory for excluded_ids list
-   - **Impact**: Significant memory consumption and slow startup, scaling issues with mature libraries
-   - **Fix**: Use timestamp-based filtering instead of giant exclusion lists
 
 ## 🟡 MEDIUM - Code Quality & Maintainability
 
-### **NEW MEDIUM PRIORITY ISSUES** 🚨
+### **REFACTORING & COMPLEXITY REDUCTION** 🆕 ⭐ **HIGH PRIORITY**
 
-4. **Service Layer Unit Testing** 🆕
+1. **~~Introduce Data Transfer Objects (DTOs)~~** ✅ **COMPLETED**
+   - **~~Problem~~**: ~~Heavy reliance on generic dictionaries (Dict[str, Any]) for data entities is error-prone~~
+   - **~~Impact~~**: ~~Typo-prone keys, no IDE support, difficult static analysis~~
+   - **~~Fix~~**: ~~Use dataclasses/TypedDict for core entities like Suggestion with centralized parsing logic~~
+   - **✅ SOLUTION**: Implemented comprehensive DTO system with `SuggestionAlbum`, `ImmichAlbum`, `VLMAnalysis`, `ClusteringCandidate`, and `PhotoAsset` dataclasses providing type safety, IDE support, and centralized data validation throughout the entire application
+
+2. **Refactor Repetitive UI Rendering Logic** 🆕 ⭐
+   - **Problem**: Duplicate thumbnail display code across render_photo_grid, render_weak_asset_selector, and sidebar
+   - **Impact**: High maintenance burden, inconsistent UI behavior
+   - **Fix**: Create reusable render_thumbnail_card() and format_suggestion_metadata() functions
+
+3. **Generalize Pagination Logic** 🆕 ⭐
+   - **Problem**: Separate pagination implementations for Core Photos and Weak Assets
+   - **Impact**: Code duplication, inconsistent pagination behavior
+   - **Fix**: Single render_pagination_controls() function with configurable page keys
+
+4. **Decompose Complex Service Methods** 🆕 ⭐
+   - **Problem**: Large methods like get_albums_with_metadata() do too many things
+   - **Impact**: Hard to read, test, and maintain
+   - **Fix**: Break into smaller helper methods (_fetch_all_albums_from_api, _extract_metadata_from_album_assets)
+
+5. **Standardize Date Handling** 🆕 ⭐
+   - **Problem**: Date parsing scattered across multiple files with inconsistent formats
+   - **Impact**: Fragile date handling, potential bugs
+   - **Fix**: Single utility function, consistent ISO 8601 storage, datetime objects for DB operations
+
+### **TESTING & VALIDATION** 🚨
+
+6. **Service Layer Unit Testing** 🆕
    - **Problem**: The service layer containing all business logic is untested
    - **Impact**: Refactoring is risky; bugs can be introduced easily
    - **Fix**: Introduce pytest and pytest-mock, write unit tests for each service with mocked dependencies
 
-5. **Configuration Schema Validation** 🆕
+7. **Configuration Schema Validation** 🆕
    - **Problem**: Invalid config.yaml (misspelled keys, wrong data types) leads to NoneType errors at runtime
    - **Impact**: Poor user experience on setup; hard-to-diagnose errors
    - **Fix**: Use Pydantic to define Config model with validation at startup
 
-6. **VLM Provider Plugin Architecture** 🆕
+8. **VLM Provider Plugin Architecture** 🆕
    - **Problem**: VLM logic tightly coupled to Ollama's API
    - **Impact**: Difficult to switch to other providers (OpenAI, Anthropic, Gemini)
    - **Fix**: Abstract base class `VLMProvider`, concrete implementations, factory pattern
@@ -111,17 +135,23 @@ These are new, high-value features that expand the application's capabilities be
 1. ✅ **Sync with Existing Immich Albums** - Prevents duplicate album suggestions
 2. ✅ **Suggest Additions to Existing Albums** - Keeps albums current with new photos
 
-### **NEXT SPRINT (High Impact)**  
-1. **Service Layer Unit Testing** - Enable safe refactoring
-2. **Configuration Schema Validation** - Better setup experience
-3. **Inefficient get_processed_asset_ids Query** - Scaling for large libraries
-4. **VLM Provider Plugin Architecture** - Multi-provider support
+### **NEXT SPRINT (Complexity Reduction - High Impact)** ⭐
+1. **Introduce Data Transfer Objects (DTOs)** - Type safety and IDE support
+2. **Refactor Repetitive UI Rendering Logic** - Eliminate code duplication 
+3. **Generalize Pagination Logic** - Single reusable pagination component
+4. **Decompose Complex Service Methods** - Improve maintainability
+5. **Standardize Date Handling** - Centralized date processing
+
+### **FOLLOWING SPRINT (Testing & Architecture)**  
+6. **Service Layer Unit Testing** - Enable safe refactoring
+7. **Configuration Schema Validation** - Better setup experience
+8. **VLM Provider Plugin Architecture** - Multi-provider support
 
 ### **FUTURE ENHANCEMENTS**
-5. **People-Aware Album Generation** - Leverage face recognition for smarter titles
-6. **Interactive Album Refinement** - Photo removal and album splitting tools
-7. **Full-Featured Table View** - Enhanced sorting, filtering, bulk operations
-8. **Semantic Search-Based Albums** - Text query-driven album creation
+10. **People-Aware Album Generation** - Leverage face recognition for smarter titles
+11. **Interactive Album Refinement** - Photo removal and album splitting tools
+12. **Full-Featured Table View** - Enhanced sorting, filtering, bulk operations
+13. **Semantic Search-Based Albums** - Text query-driven album creation
 
 ## Recently Completed ✅
 

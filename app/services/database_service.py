@@ -13,11 +13,11 @@ from contextlib import contextmanager
 from typing import Any, Literal, Optional, List, Dict, Iterator
 from .config_service import config
 from ..exceptions import DatabaseError
+from ..models import SuggestionAlbum, SuggestionStatus, suggestion_from_db_row, ClusteringCandidate, VLMAnalysis
 
 logger = logging.getLogger(__name__)
 
-# Define a literal type for status strings for robust type checking.
-SuggestionStatus = Literal['pending', 'approved', 'rejected', 'enriching', 'enrichment_failed', 'pending_enrichment', 'from_immich']
+# SuggestionStatus is now imported from models
 
 class DatabaseService:
     def __init__(self) -> None:
@@ -104,7 +104,7 @@ class DatabaseService:
             logger.info(f"Schema migration: Adding column '{column}' to table '{table}'.")
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
-    def get_pending_suggestions(self, sort_by: str = 'image_count', sort_order: str = 'desc') -> List[Dict[str, Any]]:
+    def get_pending_suggestions(self, sort_by: str = 'image_count', sort_order: str = 'desc') -> List[SuggestionAlbum]:
         """Fetches all suggestions that require user action or processing."""
         # Validate sort parameters to prevent SQL injection
         valid_sort_fields = ['created_at', 'event_start_date', 'image_count']
@@ -132,12 +132,12 @@ class DatabaseService:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(query)
-                return [dict(row) for row in cursor.fetchall()]
+                return [suggestion_from_db_row(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error("Failed to fetch pending suggestions.", exc_info=True)
             raise DatabaseError("Could not retrieve pending suggestions.") from e
 
-    def get_suggestion_details(self, suggestion_id: int) -> Optional[Dict[str, Any]]:
+    def get_suggestion_details(self, suggestion_id: int) -> Optional[SuggestionAlbum]:
         """Fetches all data for a single suggestion by its ID."""
         if not isinstance(suggestion_id, int): return None
         try:
@@ -145,7 +145,7 @@ class DatabaseService:
                 cursor = conn.cursor()
                 cursor.execute("SELECT * FROM suggestions WHERE id = ?", (suggestion_id,))
                 row = cursor.fetchone()
-                return dict(row) if row else None
+                return suggestion_from_db_row(row) if row else None
         except Exception as e:
             logger.error(f"Failed to fetch details for suggestion {suggestion_id}.", exc_info=True)
             raise DatabaseError(f"Could not retrieve suggestion {suggestion_id}.") from e
@@ -626,6 +626,105 @@ class DatabaseService:
         except Exception as e:
             logger.error(f"Failed to remove duplicate Immich albums: {e}", exc_info=True)
             raise DatabaseError(f"Could not remove duplicate Immich albums: {e}") from e
+
+    # --- New DTO-based methods for type safety ---
+    
+    def store_suggestion_from_dto(self, suggestion: SuggestionAlbum) -> int:
+        """
+        Store a SuggestionAlbum DTO to the database.
+        
+        Args:
+            suggestion: SuggestionAlbum DTO to store
+            
+        Returns:
+            The ID of the stored suggestion
+            
+        Raises:
+            DatabaseError: If storage fails
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                INSERT INTO suggestions (status, created_at, event_start_date, event_end_date, location, vlm_title, vlm_description, strong_asset_ids_json, weak_asset_ids_json, cover_asset_id, immich_album_id, additional_asset_ids_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    suggestion.status,
+                    suggestion.created_at or datetime.now(),
+                    suggestion.event_start_date,
+                    suggestion.event_end_date,
+                    suggestion.location,
+                    suggestion.vlm_title,
+                    suggestion.vlm_description,
+                    json.dumps(suggestion.strong_asset_ids),
+                    json.dumps(suggestion.weak_asset_ids),
+                    suggestion.cover_asset_id,
+                    suggestion.immich_album_id,
+                    json.dumps(suggestion.additional_asset_ids)
+                ))
+                conn.commit()
+                new_id = cursor.lastrowid
+                logger.info(f"Stored suggestion DTO with ID: {new_id}")
+                return new_id
+        except Exception as e:
+            logger.error("Failed to store suggestion DTO.", exc_info=True)
+            raise DatabaseError("Could not store suggestion DTO.") from e
+    
+    def update_suggestion_from_dto(self, suggestion: SuggestionAlbum) -> None:
+        """
+        Update a suggestion using a SuggestionAlbum DTO.
+        
+        Args:
+            suggestion: SuggestionAlbum DTO with updated data
+            
+        Raises:
+            DatabaseError: If update fails
+        """
+        if suggestion.id is None:
+            raise ValueError("Cannot update suggestion without an ID")
+            
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                UPDATE suggestions 
+                SET status = ?, event_start_date = ?, event_end_date = ?, location = ?, vlm_title = ?, vlm_description = ?, strong_asset_ids_json = ?, weak_asset_ids_json = ?, cover_asset_id = ?, additional_asset_ids_json = ?
+                WHERE id = ?
+                """, (
+                    suggestion.status,
+                    suggestion.event_start_date,
+                    suggestion.event_end_date,
+                    suggestion.location,
+                    suggestion.vlm_title,
+                    suggestion.vlm_description,
+                    json.dumps(suggestion.strong_asset_ids),
+                    json.dumps(suggestion.weak_asset_ids),
+                    suggestion.cover_asset_id,
+                    json.dumps(suggestion.additional_asset_ids),
+                    suggestion.id
+                ))
+                conn.commit()
+                logger.info(f"Updated suggestion DTO with ID: {suggestion.id}")
+        except Exception as e:
+            logger.error(f"Failed to update suggestion DTO {suggestion.id}.", exc_info=True)
+            raise DatabaseError(f"Could not update suggestion DTO {suggestion.id}.") from e
+    
+    def store_clustering_candidate(self, candidate: 'ClusteringCandidate', location: Optional[str]) -> int:
+        """
+        Stores a ClusteringCandidate DTO as a new suggestion.
+        
+        Args:
+            candidate: ClusteringCandidate DTO from clustering
+            location: The primary location name determined by the geocoder
+            
+        Returns:
+            The integer ID of the newly created suggestion record
+            
+        Raises:
+            DatabaseError: If the suggestion could not be stored
+        """
+        suggestion = SuggestionAlbum.from_clustering_candidate(candidate, location)
+        return self.store_suggestion_from_dto(suggestion)
 
 # Singleton instance for easy access throughout the application.
 db_service = DatabaseService()
