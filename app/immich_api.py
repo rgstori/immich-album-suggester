@@ -196,3 +196,39 @@ def create_immich_album(api_client: immich_python_sdk.ApiClient, title: str, ass
         logger.error(f"Failed to create album '{title}'. Reason: {e.reason}")
         logger.error(f"Response Body: {e.body}")  # This is crucial for debugging
         return False
+
+
+def add_assets_to_album(album_id: str, asset_ids: list) -> bool:
+    """
+    Adds assets to an existing Immich album.
+    
+    Args:
+        album_id: The ID of the existing album
+        asset_ids: List of asset IDs to add to the album
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if not asset_ids:
+        logger.warning("No assets to add to the album.")
+        return False
+        
+    logger.info(f"Adding {len(asset_ids)} assets to album {album_id}")
+    
+    try:
+        api_client = get_api_client()
+        albums_api = immich_python_sdk.AlbumsApi(api_client)
+        
+        # Add assets to the existing album
+        add_dto = immich_python_sdk.BulkIdsDto(ids=asset_ids)
+        albums_api.add_assets_to_album(id=album_id, bulk_ids_dto=add_dto)
+        logger.info(f"Successfully added {len(asset_ids)} assets to album {album_id}")
+        return True
+        
+    except immich_python_sdk.ApiException as e:
+        logger.error(f"Failed to add assets to album {album_id}. Reason: {e.reason}")
+        logger.error(f"Response Body: {e.body}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error adding assets to album: {e}", exc_info=True)
+        return False

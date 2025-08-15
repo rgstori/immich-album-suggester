@@ -54,13 +54,16 @@ class UISessionState:
         st.session_state.setdefault("confirm_delete_all", False)
         st.session_state.setdefault("confirm_delete_all_table", False)
         st.session_state.setdefault("select_all_weak", False)
+        
+        # Cover selection state
+        st.session_state.setdefault("cover_selection_mode", False)
     
     # --- Core Navigation Properties ---
     
     @property
     def selected_suggestion_id(self) -> Optional[int]:
         """Get the currently selected suggestion ID."""
-        return st.session_state.selected_suggestion_id
+        return st.session_state.get("selected_suggestion_id", None)
     
     @selected_suggestion_id.setter
     def selected_suggestion_id(self, value: Optional[int]) -> None:
@@ -76,7 +79,7 @@ class UISessionState:
     @property
     def selected_asset_id(self) -> Optional[str]:
         """Get the currently selected asset ID."""
-        return st.session_state.selected_asset_id
+        return st.session_state.get("selected_asset_id", None)
     
     @selected_asset_id.setter
     def selected_asset_id(self, value: Optional[str]) -> None:
@@ -86,7 +89,7 @@ class UISessionState:
     @property
     def view_mode(self) -> ViewMode:
         """Get the current view mode."""
-        return st.session_state.view_mode
+        return st.session_state.get("view_mode", "album")
     
     @view_mode.setter
     def view_mode(self, value: ViewMode) -> None:
@@ -98,7 +101,7 @@ class UISessionState:
     @property
     def gallery_page(self) -> int:
         """Get the current gallery page."""
-        return st.session_state.gallery_page
+        return st.session_state.get("gallery_page", 0)
     
     @gallery_page.setter
     def gallery_page(self, value: int) -> None:
@@ -108,7 +111,7 @@ class UISessionState:
     @property
     def core_photos_page(self) -> int:
         """Get the current core photos page."""
-        return st.session_state.core_photos_page
+        return st.session_state.get("core_photos_page", 0)
     
     @core_photos_page.setter
     def core_photos_page(self, value: int) -> None:
@@ -118,7 +121,7 @@ class UISessionState:
     @property
     def weak_assets_page(self) -> int:
         """Get the current weak assets page."""
-        return st.session_state.weak_assets_page
+        return st.session_state.get("weak_assets_page", 0)
     
     @weak_assets_page.setter
     def weak_assets_page(self, value: int) -> None:
@@ -130,19 +133,19 @@ class UISessionState:
     @property
     def included_weak_assets(self) -> Set[str]:
         """Get the set of included weak assets."""
-        return st.session_state.included_weak_assets
+        return st.session_state.get("included_weak_assets", set())
     
     @property
     def suggestions_to_enrich(self) -> Set[int]:
         """Get the set of suggestions selected for enrichment."""
-        return st.session_state.suggestions_to_enrich
+        return st.session_state.get("suggestions_to_enrich", set())
     
     # --- Sorting Properties ---
     
     @property
     def sort_by(self) -> SortBy:
         """Get the current sort field."""
-        return st.session_state.sort_by
+        return st.session_state.get("sort_by", "image_count")
     
     @sort_by.setter
     def sort_by(self, value: SortBy) -> None:
@@ -152,7 +155,7 @@ class UISessionState:
     @property
     def sort_order(self) -> SortOrder:
         """Get the current sort order."""
-        return st.session_state.sort_order
+        return st.session_state.get("sort_order", "desc")
     
     @sort_order.setter
     def sort_order(self, value: SortOrder) -> None:
@@ -234,6 +237,28 @@ class UISessionState:
     def clear_weak_asset_selections(self) -> None:
         """Clear all weak asset selections."""
         self.included_weak_assets.clear()
+    
+    # --- Cover Selection Properties ---
+    
+    @property
+    def cover_selection_mode(self) -> bool:
+        """Get the cover selection mode state."""
+        return st.session_state.get("cover_selection_mode", False)
+    
+    @cover_selection_mode.setter
+    def cover_selection_mode(self, value: bool) -> None:
+        """Set the cover selection mode state."""
+        st.session_state.cover_selection_mode = value
+    
+    def enable_cover_selection_mode(self) -> None:
+        """Enable cover selection mode."""
+        self.cover_selection_mode = True
+        logger.debug("Cover selection mode enabled")
+    
+    def disable_cover_selection_mode(self) -> None:
+        """Disable cover selection mode."""
+        self.cover_selection_mode = False
+        logger.debug("Cover selection mode disabled")
     
     # --- Pagination Management Methods ---
     

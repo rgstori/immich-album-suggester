@@ -1,7 +1,7 @@
-# Architecture and Design Decisions: Immich Album Suggester v2.3
+# Architecture and Design Decisions: Immich Album Suggester v2.4
 
-**Version: 2.3**  
-**Last Updated: 2025-08-14**
+**Version: 2.4**  
+**Last Updated: 2025-08-15**
 
 ## 1. Project Overview
 
@@ -11,8 +11,9 @@ The primary goals are to:
 1.  **Cluster photos** into meaningful events using a combination of time, location, and visual similarity (via CLIP embeddings).
 2.  **Enrich clusters** with real-world context like date and location names.
 3.  **Use a Vision Language Model (VLM)** to analyze events, suggest a descriptive title, and identify highlight photos.
-4.  **Provide a sophisticated Web UI** for users to trigger scans, manage, review, and approve these suggestions.
-5.  **Create final albums** in Immich via its official API upon user approval.
+4.  **Analyze existing albums** and suggest relevant photos that could be added based on temporal and spatial proximity.
+5.  **Provide a sophisticated Web UI** for users to trigger scans, manage, review, and approve these suggestions.
+6.  **Create final albums** in Immich or **add photos to existing albums** via its official API upon user approval.
 
 This document serves as the primary guide for development, maintenance, and future enhancements.
 
@@ -295,3 +296,193 @@ Version 2.3 focused on code quality improvements to enhance maintainability, deb
     *   **Developer Experience:** Consistent, documented interface for all state operations
 
 These quality improvements establish a solid foundation for future development while maintaining full backward compatibility with existing deployments.
+
+## 9. v2.4 Existing Album Enhancement Feature
+
+Version 2.4 introduces a major new capability: analyzing existing Immich albums and suggesting relevant photos that could be added based on intelligent clustering analysis.
+
+### 9.1. Feature Overview & Business Value
+
+*   **Problem Solved:** Addresses the "create-only" limitation where users had no help maintaining and updating existing albums with new photos
+*   **Business Impact:** Albums no longer become stale; users can discover and add relevant photos to existing albums automatically
+*   **User Experience:** Seamless integration - existing albums appear alongside new suggestions in the same interface
+
+### 9.2. Architecture Integration
+
+The existing album feature leverages the established architecture patterns while extending core capabilities:
+
+#### Database Schema Extensions
+*   **New Status:** Added `from_immich` to the `SuggestionStatus` literal type and suggestion lifecycle
+*   **New Fields:** 
+    *   `immich_album_id` (TEXT): Links suggestion to original Immich album
+    *   `additional_asset_ids_json` (TEXT): Stores potential photo additions discovered by clustering
+*   **Unified Storage:** Existing albums stored as suggestions, enabling consistent UI/workflow treatment
+
+#### Service Layer Enhancements
+*   **ImmichService Extensions:**
+    *   `get_albums_with_metadata()`: Fetches detailed album information via Immich API (`/api/albums`)
+    *   Enhanced API response handling to support `{albums: [...]}` wrapper format
+    *   Intelligent date extraction prioritizing EXIF `dateTimeOriginal` over `fileCreatedAt`
+    *   Location extraction from asset EXIF data (`city`, `state`, `country`)
+*   **DatabaseService Extensions:**
+    *   `store_immich_album_as_suggestion()`: Stores existing albums with `from_immich` status
+    *   Updated `get_pending_suggestions()` to include `from_immich` status albums
+*   **New API Function:** `add_assets_to_album()` in `immich_api.py` for adding photos to existing albums
+
+#### Clustering Algorithm Extensions
+*   **New Function:** `find_potential_additions_to_albums()` in `clustering.py`
+*   **Analysis Logic:**
+    *   **Temporal Proximity:** Finds unallocated photos within configurable time margins of existing album date ranges
+    *   **Spatial Filtering:** Applies location-based filtering when album location data is available
+    *   **Smart Exclusion:** Never suggests photos already in any album (prevents duplicate organization)
+    *   **Performance Optimization:** Uses API `assetCount` field and caching to minimize API calls
+
+### 9.3. Workflow Integration
+
+#### Clustering Pass Integration
+The existing album analysis is seamlessly integrated into the standard clustering workflow:
+
+1. **Regular Clustering:** Photos excluded from existing albums are clustered into new suggestions
+2. **Album Import:** Existing albums fetched and analyzed for metadata extraction
+3. **Addition Discovery:** Clustering algorithm identifies potential additions to each existing album
+4. **Unified Storage:** Both new suggestions and existing albums stored in same database table with different statuses
+
+#### UI/UX Design Decisions
+*   **Unified Interface:** Existing albums appear in the main suggestion list with distinctive 📱 "From Immich" status
+*   **Specialized Actions:** 
+    *   "➕ Add N Photos" button (enabled only when additions found)
+    *   "👁️‍🗨️ Hide Album" (equivalent to reject for existing albums)
+*   **Dual Gallery View:** 
+    *   "Current Album Photos" section shows existing album contents
+    *   "Potential Additions" section shows clustering-discovered candidate photos
+*   **Smart Photo Counts:** Consistent `existing_count (+addition_count)` format throughout interface
+
+### 9.4. Technical Design Decisions & Rationale
+
+#### Decision: Unified Suggestion Storage
+*   **Rationale:** Storing existing albums as suggestions enables reuse of all existing UI components, state management, and workflows
+*   **Benefits:** Minimal code duplication, consistent user experience, simplified maintenance
+*   **Trade-off:** Slight database complexity with additional status type
+
+#### Decision: API-First Album Metadata
+*   **Rationale:** Use official Immich API (`/api/albums`) for album metadata rather than direct database access
+*   **Benefits:** API stability, proper authentication, comprehensive asset metadata
+*   **Implementation:** Added robust response parsing to handle both `{albums: [...]}` and direct array formats
+
+#### Decision: Conservative Addition Algorithm
+*   **Rationale:** Focus on high-confidence temporal/spatial matches rather than aggressive visual similarity
+*   **Benefits:** Reduces false positives, maintains user trust, allows for future enhancement
+*   **Parameters:** Configurable time margins (default: 2x standard clustering threshold)
+
+#### Decision: Graceful Degradation
+*   **Rationale:** Existing album analysis failures should not halt new album discovery
+*   **Implementation:** Comprehensive exception handling with detailed logging
+*   **User Impact:** Users always get new suggestions even if existing album analysis fails
+
+### 9.5. Performance & Scalability Considerations
+
+*   **API Efficiency:** Leverages album `assetCount` field when available to avoid manual counting
+*   **Caching Strategy:** Album asset lists cached to prevent repeated API calls during session
+*   **Incremental Processing:** Only processes albums with valid IDs and non-empty asset collections
+*   **Memory Management:** Processes albums individually rather than loading all metadata into memory
+
+### 9.6. Security & Robustness
+
+*   **API Compliance:** Verified against official Immich API documentation (v1.138.0)
+*   **Field Validation:** Added album ID validation to skip malformed album records
+*   **Exception Isolation:** Album processing errors don't affect core clustering functionality
+*   **Type Safety:** Full type annotations for all new functions and data structures
+
+This feature represents a significant enhancement to the application's value proposition while maintaining architectural consistency and code quality standards established in previous versions.
+
+## 10. v2.5 Photo Metadata & Cover Selection Enhancements
+
+Version 2.5 focuses on enhancing the user experience for photo management and album customization with improved metadata display and interactive cover selection.
+
+### 10.1. Photo Metadata Display Enhancement
+
+#### Problem & Solution
+*   **Problem:** Users needed to view individual photos to understand dates and locations, slowing down album review
+*   **Solution:** Added compact, informative metadata display directly under each thumbnail in album view
+
+#### Implementation Details
+*   **Comprehensive Date Parsing:** Enhanced `get_photo_metadata()` function with robust date format support:
+    *   **Primary Sources:** `dateTimeOriginal`, `dateTime`, `createDate`, `modifyDate`, `fileCreatedAt`, `createdAt`
+    *   **Format Support:** ISO format (with T), YYYY-MM-DD, YYYY:MM:DD (EXIF standard)
+    *   **Fallback Logic:** Tries multiple date candidates until successful parse
+    *   **Error Handling:** Graceful degradation to "No date" rather than "Invalid date"
+
+*   **Location Data Extraction:** Intelligent location formatting from EXIF metadata:
+    *   **EXIF Sources:** City, state, country fields
+    *   **Smart Formatting:** "City, Country" or "State, Country" for optimal readability
+    *   **Fallback Handling:** Single location component when only one available
+
+*   **UI Integration:** Compact display under thumbnails with emoji icons:
+    *   **Date Format:** "📅 Jan 15, 2024" - human-readable, space-efficient
+    *   **Location Format:** "📍 Paris, France" - concise but informative
+    *   **Caching:** 5-minute TTL cache on metadata to improve performance
+
+### 10.2. Interactive Cover Selection System
+
+#### Design Philosophy
+*   **Mode-Based Interface:** Clear distinction between normal photo viewing and cover selection
+*   **User Intent Clarity:** Explicit activation prevents accidental cover changes
+*   **Visual Feedback:** Clear indicators throughout the selection process
+
+#### Architecture & Implementation
+*   **State Management Extension:** Enhanced `UISessionState` with cover selection properties:
+    *   `cover_selection_mode`: Boolean state tracking active selection mode
+    *   `enable_cover_selection_mode()` / `disable_cover_selection_mode()`: State transition methods
+    *   Integration with existing session state reset patterns
+
+*   **Database Service Extension:** Added `update_suggestion_cover()` method:
+    *   **Direct Updates:** Immediate database updates when cover is selected
+    *   **Logging:** Comprehensive logging of cover changes for debugging
+    *   **Error Handling:** Proper exception handling with rollback capability
+
+*   **Dynamic UI Behavior:** Context-sensitive button behavior in photo grids:
+    *   **Normal Mode:** "👁️" view buttons for photo inspection
+    *   **Cover Mode:** "🖼️ Set as Cover" buttons for selection
+    *   **Current Cover:** "✅ Current Cover" (disabled) to show existing selection
+    *   **Error Cases:** Cover selection available even when thumbnails fail to load
+
+#### User Experience Flow
+1. **Activation:** "🖼️ Select Cover Picture" button enables selection mode
+2. **Visual Feedback:** Orange warning banner with clear instructions
+3. **Selection:** Any photo thumbnail shows primary-styled "Set as Cover" button
+4. **Completion:** Immediate database update, success message, automatic mode exit
+5. **Cancellation:** "❌ Cancel Cover Selection" available at any time
+
+#### Design Decisions & Rationale
+
+**Decision: Mode-Based Rather Than Per-Photo Buttons**
+*   **Rationale:** Prevents UI clutter and accidental cover changes
+*   **Benefits:** Cleaner interface, explicit user intent, better mobile experience
+*   **Implementation:** Session state tracks mode, buttons change behavior dynamically
+
+**Decision: Immediate Database Updates**
+*   **Rationale:** Users expect immediate feedback when making selections
+*   **Benefits:** No need to "save" changes, consistent with title editing behavior
+*   **Trade-off:** Requires proper error handling for network/database failures
+
+**Decision: Visual State Indicators**
+*   **Rationale:** Users need clear feedback about what mode they're in and what actions are available
+*   **Implementation:** Color-coded warning banner, button state changes, disabled states for current cover
+*   **Benefits:** Reduces user confusion, prevents errors, improves accessibility
+
+### 10.3. Technical Integration & Quality
+
+*   **Backward Compatibility:** All enhancements work with existing albums and suggestions
+*   **Performance Optimization:** Metadata caching prevents repeated EXIF parsing
+*   **Error Resilience:** Graceful degradation when metadata parsing fails
+*   **Type Safety:** Full type annotations for all new functions and state properties
+*   **Consistent Architecture:** Follows established service layer and state management patterns
+
+### 10.4. Impact & Benefits
+
+*   **User Efficiency:** Faster album review with immediate access to photo context
+*   **Album Quality:** Easy cover selection improves album visual appeal
+*   **Workflow Integration:** Features work seamlessly with existing and new album workflows
+*   **Mobile Friendly:** Compact metadata and clear selection modes work well on mobile devices
+
+These enhancements continue the v2.x focus on user experience improvements while maintaining the established architectural patterns and code quality standards.

@@ -132,3 +132,103 @@ def find_album_candidates(df: pd.DataFrame, config: dict) -> list[dict]:
         })
         
     return final_albums
+
+
+def find_potential_additions_to_albums(assets_df: pd.DataFrame, existing_albums: list[dict], config: dict) -> dict[str, list[str]]:
+    """
+    Finds photos that could potentially be added to existing Immich albums.
+    
+    Args:
+        assets_df: DataFrame of all available assets (should NOT include assets already in albums)
+        existing_albums: List of existing album dictionaries with metadata
+        config: Configuration dictionary with clustering parameters
+        
+    Returns:
+        Dictionary mapping album_id to list of asset_ids that could be added
+    """
+    if assets_df.empty or not existing_albums:
+        return {}
+    
+    logger.info(f"Finding potential additions for {len(existing_albums)} existing albums from {len(assets_df)} available assets")
+    
+    # Preprocess the available assets
+    processed_df = _preprocess_data(assets_df.copy())
+    
+    cfg = config.get('clustering', {})
+    time_threshold_hours = cfg.get('stage1', {}).get('time_threshold_hours', 6)
+    location_threshold_km = cfg.get('stage1', {}).get('location_threshold_km', 1.0)
+    similarity_threshold = cfg.get('stage2', {}).get('similarity_threshold', 0.7)
+    
+    potential_additions = {}
+    
+    for album in existing_albums:
+        album_id = album['album_id']
+        album_title = album.get('title', 'Unknown Album')
+        
+        # Get album's asset IDs to fetch their embeddings/metadata
+        existing_asset_ids = set(album.get('asset_ids', []))
+        if not existing_asset_ids:
+            continue
+            
+        # Calculate album's characteristics from existing assets
+        album_start = album.get('start_date')
+        album_end = album.get('end_date')
+        album_location = album.get('location')
+        
+        if not album_start or not album_end:
+            continue  # Skip albums without date information
+            
+        # Convert dates for comparison
+        if isinstance(album_start, str):
+            from datetime import datetime
+            album_start = datetime.fromisoformat(album_start.replace('Z', '+00:00'))
+            album_end = datetime.fromisoformat(album_end.replace('Z', '+00:00'))
+        
+        # Time-based filtering: find assets within reasonable time range
+        time_margin_hours = time_threshold_hours * 2  # Allow wider margin for additions
+        time_start = album_start - pd.Timedelta(hours=time_margin_hours)
+        time_end = album_end + pd.Timedelta(hours=time_margin_hours)
+        
+        time_candidates = processed_df[
+            (processed_df['timestamp'] >= time_start) & 
+            (processed_df['timestamp'] <= time_end)
+        ]
+        
+        if time_candidates.empty:
+            continue
+            
+        logger.debug(f"Album '{album_title}': {len(time_candidates)} time candidates (margin: {time_margin_hours}h)")
+        
+        # Location-based filtering if album has location
+        location_candidates = time_candidates
+        if album_location and not time_candidates.empty:
+            # For simplicity, we'll use a text-based location match for now
+            # In a more sophisticated implementation, you'd use GPS coordinates
+            if 'city' in time_candidates.columns or 'state' in time_candidates.columns:
+                # Basic location filtering - could be enhanced with GPS distance calculation
+                location_candidates = time_candidates[
+                    time_candidates.apply(lambda row: 
+                        album_location.lower() in str(row.get('city', '')).lower() or
+                        album_location.lower() in str(row.get('state', '')).lower() or
+                        album_location.lower() in str(row.get('country', '')).lower(),
+                        axis=1
+                    )
+                ]
+                if location_candidates.empty:
+                    # If no exact location matches, fall back to time candidates
+                    location_candidates = time_candidates
+                    
+        # For visual similarity, we'd need to get embeddings of existing album photos
+        # This is computationally expensive, so we'll implement a simplified version
+        # that focuses on time/location for now
+        
+        candidate_asset_ids = location_candidates['assetId'].tolist()
+        
+        if candidate_asset_ids:
+            potential_additions[album_id] = candidate_asset_ids
+            logger.debug(f"Album '{album_title}': Found {len(candidate_asset_ids)} potential additions")
+    
+    total_suggestions = sum(len(assets) for assets in potential_additions.values())
+    logger.info(f"Found {total_suggestions} potential additions across {len(potential_additions)} albums")
+    
+    return potential_additions

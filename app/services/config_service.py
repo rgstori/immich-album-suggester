@@ -76,6 +76,16 @@ class AppConfig:
 
     def _setup_logging(self) -> None:
         """Configures the root logger for consistent logging across the app."""
+        # Check if logging has already been configured to prevent double setup
+        root_logger = logging.getLogger()
+        if root_logger.handlers:
+            # Logging already configured, just set our level and return
+            log_config = self.get('logging', {})
+            log_level_str = log_config.get('level', 'INFO').upper()
+            log_level = getattr(logging, log_level_str, logging.INFO)
+            root_logger.setLevel(log_level)
+            return
+            
         log_config = self.get('logging', {})
         log_level_str = log_config.get('level', 'INFO').upper()
         log_level = getattr(logging, log_level_str, logging.INFO)
@@ -93,7 +103,8 @@ class AppConfig:
             handlers=[
                 logging.FileHandler(log_file),
                 logging.StreamHandler(sys.stdout) # Log to console (stdout)
-            ]
+            ],
+            force=True  # Force reconfiguration if needed
         )
 
         # Silence overly verbose libraries if needed

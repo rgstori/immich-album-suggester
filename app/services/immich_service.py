@@ -10,7 +10,7 @@ import logging
 import pandas as pd
 import requests
 import time
-from typing import Set, List
+from typing import Set, List, Dict, Any
 from .config_service import config
 from .. import immich_db, immich_api
 from ..exceptions import ImmichDBError, ImmichAPIError
@@ -205,7 +205,12 @@ class ImmichService:
             response = requests.get(albums_url, headers=headers, timeout=timeout)
             response.raise_for_status()
             
-            albums_data = response.json()
+            response_data = response.json()
+            # Handle both response formats: direct array or {albums: [...]} wrapper
+            if isinstance(response_data, list):
+                albums_data = response_data
+            else:
+                albums_data = response_data.get('albums', response_data)
             logger.info(f"Retrieved {len(albums_data)} albums from Immich")
             
             # Extract all unique asset IDs from all albums
@@ -213,8 +218,25 @@ class ImmichService:
             total_assets = 0
             
             for album in albums_data:
+                album_id = album.get('id')
                 album_name = album.get('albumName', 'Unknown')
                 album_assets = album.get('assets', [])
+                asset_count = album.get('assetCount', 0)
+                
+                # If assets array is empty but assetCount > 0, fetch album details individually
+                if not album_assets and asset_count > 0:
+                    logger.debug(f"Album '{album_name}' has {asset_count} assets but empty assets array - fetching details for exclusion...")
+                    try:
+                        # Fetch individual album details to get assets
+                        album_detail_url = f"{api_base_url}/albums/{album_id}"
+                        detail_response = requests.get(album_detail_url, headers=headers, timeout=timeout)
+                        detail_response.raise_for_status()
+                        album_detail = detail_response.json()
+                        album_assets = album_detail.get('assets', [])
+                        logger.debug(f"Fetched {len(album_assets)} assets for exclusion from album '{album_name}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch details for album '{album_name}' during exclusion: {e}")
+                        continue
                 
                 # Extract asset IDs from the assets array
                 for asset in album_assets:
@@ -223,7 +245,7 @@ class ImmichService:
                         asset_ids.add(asset_id)
                         total_assets += 1
                 
-                logger.debug(f"Album '{album_name}': {len(album_assets)} assets")
+                logger.debug(f"Album '{album_name}': {len(album_assets)} assets added to exclusion list")
             
             logger.info(f"Found {len(asset_ids)} unique assets across {len(albums_data)} albums")
             
@@ -253,6 +275,160 @@ class ImmichService:
         self._album_assets_cache.clear()
         self._album_assets_cache_time = 0
         logger.debug("Album assets cache cleared")
+    
+    def get_albums_with_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Fetches all Immich albums with detailed metadata including dates, locations, and asset counts.
+        
+        Returns:
+            List of album dictionaries with detailed metadata for displaying alongside suggestions
+            
+        Raises:
+            ImmichAPIError: If the API calls fail
+        """
+        try:
+            # Use the same API base URL logic as the SDK client
+            from .. import immich_api
+            from datetime import datetime
+            import requests
+            
+            api_base_url = immich_api._build_api_base(config.immich_url)
+            api_key = config.immich_api_key
+            
+            headers = {
+                'x-api-key': api_key,
+                'Accept': 'application/json'
+            }
+            
+            # Get all albums - try with different parameters to see if we can get assets
+            albums_url = f"{api_base_url}/albums"
+            timeout = self._sdk_config['immich']['api_timeout_seconds']
+            
+            response = requests.get(albums_url, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            
+            response_data = response.json()
+            
+            # Handle both response formats: direct array or {albums: [...]} wrapper
+            if isinstance(response_data, list):
+                albums_data = response_data
+            else:
+                albums_data = response_data.get('albums', response_data)
+            logger.info(f"Processing {len(albums_data)} albums for metadata extraction")
+            
+            detailed_albums = []
+            
+            for album in albums_data:
+                album_id = album.get('id')
+                album_name = album.get('albumName', 'Untitled Album')
+                album_description = album.get('description', '')
+                assets = album.get('assets', [])
+                
+                
+                # Skip albums without ID
+                if not album_id:
+                    logger.warning(f"Skipping album '{album_name}': missing album ID")
+                    continue
+                
+                # If assets array is empty but assetCount > 0, fetch album details individually
+                asset_count = album.get('assetCount', 0)
+                if not assets and asset_count > 0:
+                    logger.info(f"Album '{album_name}' has {asset_count} assets but empty assets array - fetching details...")
+                    try:
+                        # Fetch individual album details to get assets
+                        album_detail_url = f"{api_base_url}/albums/{album_id}"
+                        detail_response = requests.get(album_detail_url, headers=headers, timeout=timeout)
+                        detail_response.raise_for_status()
+                        album_detail = detail_response.json()
+                        assets = album_detail.get('assets', [])
+                        logger.info(f"Fetched {len(assets)} assets for album '{album_name}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch details for album '{album_name}': {e}")
+                        continue
+                
+                # Skip albums that still have no assets after detail fetch
+                if not assets:
+                    logger.info(f"Skipping album '{album_name}' (ID: {album_id}): no assets after detail fetch")
+                    continue
+                
+                # Extract dates and locations from assets
+                dates = []
+                locations = []
+                asset_ids = []
+                
+                for asset in assets:
+                    asset_id = asset.get('id')
+                    if asset_id:
+                        asset_ids.append(asset_id)
+                    
+                    # Extract EXIF data for date and location processing
+                    exif_info = asset.get('exifInfo', {})
+                    
+                    # Extract date taken from asset (prioritize EXIF dateTimeOriginal, fallback to fileCreatedAt)
+                    date_taken = exif_info.get('dateTimeOriginal') or asset.get('fileCreatedAt')
+                    
+                    if date_taken:
+                        try:
+                            if isinstance(date_taken, str):
+                                # Handle ISO format dates
+                                date_obj = datetime.fromisoformat(date_taken.replace('Z', '+00:00'))
+                                dates.append(date_obj)
+                        except (ValueError, TypeError):
+                            pass
+                    
+                    # Extract location from EXIF data if available
+                    if exif_info:
+                        city = exif_info.get('city')
+                        state = exif_info.get('state') 
+                        country = exif_info.get('country')
+                        
+                        if city or state or country:
+                            location_parts = [city, state, country]
+                            location = ', '.join([part for part in location_parts if part])
+                            if location:
+                                locations.append(location)
+                
+                # Calculate date range
+                start_date = min(dates) if dates else None
+                end_date = max(dates) if dates else None
+                
+                # Find most common location
+                location = None
+                if locations:
+                    from collections import Counter
+                    location_counter = Counter(locations)
+                    location = location_counter.most_common(1)[0][0]
+                
+                # Get cover asset (first asset or explicitly set one)
+                cover_asset_id = album.get('albumThumbnailAssetId')
+                if not cover_asset_id and asset_ids:
+                    cover_asset_id = asset_ids[0]
+                
+                detailed_album = {
+                    'album_id': album_id,
+                    'title': album_name,
+                    'description': album_description,
+                    'asset_ids': asset_ids,
+                    'asset_count': album.get('assetCount', len(asset_ids)),  # Use API field if available
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'location': location,
+                    'cover_asset_id': cover_asset_id,
+                    'additional_asset_ids': []  # Will be populated by clustering logic
+                }
+                
+                detailed_albums.append(detailed_album)
+                logger.info(f"✓ Processed album '{album_name}': {len(asset_ids)} assets, dates {start_date} to {end_date}")
+            
+            logger.info(f"Successfully processed {len(detailed_albums)} albums with metadata out of {len(albums_data)} total albums")
+            return detailed_albums
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch album metadata from Immich API: {e}", exc_info=True)
+            raise ImmichAPIError(f"Could not retrieve album metadata from Immich: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error while processing album metadata: {e}", exc_info=True)
+            raise ImmichAPIError(f"Unexpected error processing album metadata: {e}") from e
 
 # Singleton instance
 immich_service = ImmichService()

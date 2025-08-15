@@ -47,12 +47,58 @@ def run_clustering_pass(mode: str):
     """
     db_service.log_to_db("INFO", f"--- Pass 1: Clustering started in '{mode}' mode ---")
     
+    # STEP 1: Process existing Immich albums FIRST to avoid duplicate suggestions
+    try:
+        db_service.log_to_db("INFO", "Processing existing Immich albums...")
+        
+        # Get detailed album metadata
+        existing_albums = immich_service.get_albums_with_metadata()
+        
+        if existing_albums:
+            # First, remove any existing duplicates from previous runs
+            duplicate_count = db_service.remove_duplicate_immich_albums()
+            if duplicate_count > 0:
+                db_service.log_to_db("INFO", f"Removed {duplicate_count} duplicate Immich album suggestions.")
+            
+            # Clean up albums that no longer exist in Immich
+            current_album_ids = [album['album_id'] for album in existing_albums]
+            deleted_count = db_service.cleanup_deleted_immich_albums(current_album_ids)
+            if deleted_count > 0:
+                db_service.log_to_db("INFO", f"Cleaned up {deleted_count} suggestions for deleted Immich albums.")
+            
+            # Store existing albums as suggestions with 'from_immich' status
+            stored_albums = 0
+            for album in existing_albums:
+                try:
+                    # Store the album as a suggestion (without potential additions for now)
+                    album['additional_asset_ids'] = []  # Will be populated later
+                    suggestion_id = db_service.store_immich_album_as_suggestion(album)
+                    if suggestion_id:  # Only count if actually stored (not skipped duplicate)
+                        stored_albums += 1
+                except Exception as e:
+                    db_service.log_to_db("ERROR", f"Failed to store album '{album.get('title', 'Unknown')}': {e}")
+                    logger.error(f"Failed to store album {album.get('title')}: {e}", exc_info=True)
+            
+            db_service.log_to_db("INFO", f"Processed {len(existing_albums)} existing albums ({stored_albums} new, {len(existing_albums) - stored_albums} existing).")
+        else:
+            db_service.log_to_db("INFO", "No existing albums found in Immich.")
+            # Still run cleanup in case albums were deleted
+            deleted_count = db_service.cleanup_deleted_immich_albums([])
+            if deleted_count > 0:
+                db_service.log_to_db("INFO", f"Cleaned up {deleted_count} suggestions for all deleted Immich albums.")
+            
+    except Exception as e:
+        # Graceful degradation: log error but don't fail the clustering process
+        db_service.log_to_db("WARN", f"Could not process existing albums: {e}")
+        logger.warning(f"Failed to process existing albums: {e}", exc_info=True)
+
+    # STEP 2: Build exclusion list (processed suggestions + existing album assets)
     excluded_ids = []
     if mode == 'incremental':
         excluded_ids = db_service.get_processed_asset_ids()
         db_service.log_to_db("INFO", f"Found {len(excluded_ids)} previously processed assets to exclude.")
     
-    # NEW: Fetch assets that are already in existing Immich albums to prevent duplicates
+    # Exclude photos that are already in existing Immich albums from new suggestions
     try:
         existing_album_assets = immich_service.get_all_asset_ids_in_albums()
         original_excluded_count = len(excluded_ids)
@@ -65,7 +111,7 @@ def run_clustering_pass(mode: str):
         db_service.log_to_db("WARN", f"Could not fetch existing album assets: {e}. Continuing without album exclusion.")
         logger.warning(f"Failed to fetch existing album assets: {e}", exc_info=True)
 
-    # Use the ImmichService to fetch asset data.
+    # STEP 3: Use the ImmichService to fetch asset data for NEW album clustering
     assets_df = immich_service.fetch_assets_for_clustering(excluded_ids)
     
     if assets_df.empty:
@@ -86,8 +132,35 @@ def run_clustering_pass(mode: str):
         # Geocoding is part of the initial storage step.
         location_str = geocoding.get_primary_location(candidate['gps_coords'])
         db_service.store_initial_suggestion(candidate, location_str)
+    
+    # STEP 4: Find potential additions to existing albums (cross-album suggestions)
+    # This happens after new album clustering to potentially suggest photos from new candidates
+    # as additions to existing albums
+    try:
+        if not assets_df.empty:  # Only if we processed some assets
+            db_service.log_to_db("INFO", "Finding potential additions to existing albums...")
+            
+            # Get existing albums (already stored above)
+            existing_albums = immich_service.get_albums_with_metadata()
+            
+            if existing_albums:
+                # Find potential additions from the processed assets
+                potential_additions = clustering.find_potential_additions_to_albums(assets_df, existing_albums, config.yaml)
+                
+                if potential_additions:
+                    total_potential_additions = sum(len(additions) for additions in potential_additions.values())
+                    db_service.log_to_db("INFO", f"Found {total_potential_additions} potential photo additions across {len(potential_additions)} existing albums.")
+                    
+                    # TODO: Update existing album suggestions with potential additions
+                    # This would require updating the database records that were created in STEP 1
+                
+    except Exception as e:
+        # Graceful degradation: log error but don't fail the clustering process
+        db_service.log_to_db("WARN", f"Could not find potential additions to existing albums: {e}")
+        logger.warning(f"Failed to find potential additions: {e}", exc_info=True)
         
-    db_service.log_to_db("INFO", f"--- Stored {len(album_candidates)} new candidate(s). Ready for enrichment. ---")
+    # Final summary
+    db_service.log_to_db("INFO", f"--- Pass 1 complete: {len(album_candidates)} new album candidate(s) created. Ready for enrichment. ---")
 
 
 def run_enrichment_pass(suggestion_id: int):

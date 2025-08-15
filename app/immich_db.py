@@ -12,8 +12,7 @@ import psycopg2
 import logging
 from psycopg2.extras import RealDictCursor
 
-# Configure logging to avoid exposing sensitive data
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Use the centralized logging configuration from ConfigService
 logger = logging.getLogger(__name__)
 
 
