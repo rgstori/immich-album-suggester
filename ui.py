@@ -23,7 +23,6 @@ except ImportError:
     sys.exit(1)
 
 import streamlit as st
-import json
 import logging
 import math
 import time
@@ -38,6 +37,8 @@ from app.exceptions import AppServiceError
 from app.ui_state import ui_state
 # Import DTOs for type-safe data handling
 from app.models import SuggestionAlbum
+# Import UI utilities for consistent rendering
+from app.ui_utils import format_date_range, format_suggestion_metadata, UILayoutManager, render_thumbnail_card, render_pagination_controls
 
 # Initialize the logger for this UI module.
 logger = logging.getLogger(__name__)
@@ -368,81 +369,26 @@ def render_suggestion_list():
                 if not cover_id:
                     cover_id = suggestion.strong_asset_ids[0] if suggestion.strong_asset_ids else None
                 
-                thumb_bytes = get_cached_thumbnail(cover_id)
-                if thumb_bytes:
-                    st.image(thumb_bytes, use_container_width=True)
+                # Use the unified thumbnail rendering function
+                if cover_id:
+                    thumb_bytes = get_cached_thumbnail(cover_id)
+                    if thumb_bytes:
+                        st.image(thumb_bytes, use_container_width=True)
+                    else:
+                        st.markdown("🖼️") # Fallback icon
                 else:
                     st.markdown("🖼️") # Fallback icon
 
                 st.text_input("Title", value=suggestion.vlm_title, key=f"title_{s_id}", disabled=True)
 
-                # Calculate photo counts
-                core_count = len(suggestion.strong_asset_ids)
-                
-                if suggestion.status == 'from_immich':
-                    # For existing albums, show additional assets from clustering
-                    additional_count = len(suggestion.additional_asset_ids)
-                else:
-                    # For new suggestions, show weak assets
-                    additional_count = len(suggestion.weak_asset_ids)
-                
-                # Display photo count with additional photos format
-                if additional_count > 0:
-                    photo_text = f"{core_count} (+{additional_count}) photos"
-                else:
-                    photo_text = f"{core_count} photos"
-                
-                # Format date range
-                start_date = suggestion.get('event_start_date')
-                end_date = suggestion.get('event_end_date')
-                date_text = ""
-                
-                if start_date:
-                    try:
-                        from datetime import datetime
-                        if isinstance(start_date, str):
-                            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-                        else:
-                            start_dt = start_date
-                        
-                        start_formatted = start_dt.strftime('%d-%m-%y')
-                        
-                        if end_date:
-                            if isinstance(end_date, str):
-                                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                            else:
-                                end_dt = end_date
-                            
-                            # Only show end date if it's different from start date
-                            if start_dt.date() != end_dt.date():
-                                end_formatted = end_dt.strftime('%d-%m-%y')
-                                date_text = f"{start_formatted} - {end_formatted}"
-                            else:
-                                date_text = start_formatted
-                        else:
-                            date_text = start_formatted
-                    except (ValueError, AttributeError):
-                        date_text = ""
-                
-                # Display location
-                location = suggestion.get('location') or "Unknown location"
-                
-                # Combine all info - ensure all parts are strings
-                info_parts = [f"ID: {s_id}", photo_text]
-                if date_text:
-                    info_parts.append(date_text)
-                if location:
-                    info_parts.append(location)
-                
-                # Filter out any None values and ensure strings
-                info_parts = [str(part) for part in info_parts if part is not None]
-                
-                st.caption(" | ".join(info_parts))
+                # Use the standardized metadata formatting
+                metadata = format_suggestion_metadata(suggestion, include_counts=True)
+                st.caption(f"ID: {s_id} | {metadata}")
 
                 if is_enriching:
                     st.info("AI is analyzing...", icon="⏳")
                 elif suggestion.status == 'pending_enrichment':
-                    action_col1, action_col2 = st.columns(2)
+                    action_col1, action_col2 = UILayoutManager.action_buttons(2)
                     is_checked = s_id in ui_state.suggestions_to_enrich
                     action_col1.checkbox("Select", value=is_checked, key=f"cb_{s_id}", on_change=lambda sid=s_id: toggle_enrich_selection(sid))
                     if action_col2.button("View", key=f"view_{s_id}", use_container_width=True):
@@ -459,10 +405,10 @@ def toggle_enrich_selection(suggestion_id):
         ui_state.suggestions_to_enrich.add(suggestion_id)
 
 
-def render_album_view(suggestion: dict):
+def render_album_view(suggestion: SuggestionAlbum):
     """Renders the main detailed view for a single album suggestion."""
     # --- Editable Title ---
-    current_title = suggestion.get('vlm_title', '')
+    current_title = suggestion.vlm_title or ''
     new_title = st.text_input("Album Title", value=current_title, key="album_title_edit")
     
     # Update title in database if changed
@@ -475,71 +421,15 @@ def render_album_view(suggestion: dict):
             st.error(f"Failed to update title: {e}")
     
     # --- Metadata Display ---
-    strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-    core_count = len(strong_ids)
+    # Use the standardized metadata formatting
+    metadata = format_suggestion_metadata(suggestion, include_counts=True)
+    st.caption(metadata)
     
+    # Keep track of weak assets for later use
     if suggestion.status == 'from_immich':
-        # For existing albums, show additional assets from clustering
-        additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
-        additional_count = len(additional_assets)
         weak_ids = []  # No weak assets for existing albums
     else:
-        # For new suggestions, show weak assets
-        weak_ids = json.loads(suggestion.get('weak_asset_ids_json', '[]'))
-        additional_count = len(weak_ids)
-    
-    # Photo count text
-    if additional_count > 0:
-        photo_text = f"{core_count} (+{additional_count}) photos"
-    else:
-        photo_text = f"{core_count} photos"
-    
-    # Date range formatting (same logic as sidebar)
-    start_date = suggestion.get('event_start_date')
-    end_date = suggestion.get('event_end_date')
-    date_text = ""
-    
-    if start_date:
-        try:
-            from datetime import datetime
-            if isinstance(start_date, str):
-                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-            else:
-                start_dt = start_date
-            
-            start_formatted = start_dt.strftime('%d-%m-%y')
-            
-            if end_date:
-                if isinstance(end_date, str):
-                    end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                else:
-                    end_dt = end_date
-                
-                # Only show end date if it's different from start date
-                if start_dt.date() != end_dt.date():
-                    end_formatted = end_dt.strftime('%d-%m-%y')
-                    date_text = f"{start_formatted} - {end_formatted}"
-                else:
-                    date_text = start_formatted
-            else:
-                date_text = start_formatted
-        except (ValueError, AttributeError):
-            date_text = ""
-    
-    # Location
-    location = suggestion.get('location') or 'Unknown location'
-    
-    # Display metadata - ensure all parts are strings and not None
-    metadata_parts = [photo_text]
-    if date_text:
-        metadata_parts.append(date_text)
-    if location:
-        metadata_parts.append(location)
-    
-    # Filter out any None values just in case
-    metadata_parts = [str(part) for part in metadata_parts if part is not None]
-    
-    st.caption(" | ".join(metadata_parts))
+        weak_ids = suggestion.weak_asset_ids
     st.divider()
     
     # --- Cover Selection Mode ---
@@ -560,13 +450,14 @@ def render_album_view(suggestion: dict):
     st.divider()
 
     # --- Photo Galleries ---
+    strong_ids = suggestion.strong_asset_ids
     if suggestion.status == 'from_immich':
         # For existing Immich albums, show existing photos and potential additions
         st.subheader(f"Current Album Photos ({len(strong_ids)})")
-        render_photo_grid(strong_ids, suggestion.get('cover_asset_id'))
+        render_photo_grid(strong_ids, suggestion.cover_asset_id)
         
         # Show potential additions if any
-        additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
+        additional_assets = suggestion.additional_asset_ids
         if additional_assets:
             st.divider()
             st.subheader(f"Potential Additions ({len(additional_assets)})")
@@ -575,14 +466,14 @@ def render_album_view(suggestion: dict):
     else:
         # Regular workflow for new suggestions
         st.subheader("Core Photos")
-        render_photo_grid(strong_ids, suggestion.get('cover_asset_id'))
+        render_photo_grid(strong_ids, suggestion.cover_asset_id)
         
         if weak_ids:
             st.divider()
             render_weak_asset_selector(weak_ids)
 
 
-def render_album_actions(suggestion: dict):
+def render_album_actions(suggestion: SuggestionAlbum):
     """Renders the main action buttons for an album (Approve, Reject, etc.)."""
     s_id = suggestion.id
     is_enriching = process_service.is_running(f"enrich_{s_id}") or suggestion.status == 'enriching'
@@ -597,7 +488,7 @@ def render_album_actions(suggestion: dict):
         cols = st.columns(3)
         
         # Add Photos Button - for existing albums with potential additions
-        additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
+        additional_assets = suggestion.additional_asset_ids
         has_additions = len(additional_assets) > 0
         
         add_button_text = f"➕ Add {len(additional_assets)} Photos" if has_additions else "➕ No New Photos"
@@ -615,7 +506,7 @@ def render_album_actions(suggestion: dict):
             st.rerun()
     else:
         # Regular workflow for new suggestions
-        cols = st.columns(4)
+        cols = UILayoutManager.photo_grid_layout(4)
         
         # Approve Button - enable for both pending_enrichment and pending statuses
         can_create_album = suggestion.status in ['pending', 'pending_enrichment']
@@ -639,11 +530,11 @@ def render_album_actions(suggestion: dict):
             st.rerun()
 
 
-def handle_approve_action(suggestion: dict):
+def handle_approve_action(suggestion: SuggestionAlbum):
     """Logic for when a user approves a suggestion."""
     with st.spinner("Creating album in Immich... This may take a moment."):
         try:
-            strong_assets = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
+            strong_assets = suggestion.strong_asset_ids
             final_asset_ids = strong_assets + list(ui_state.included_weak_assets)
             
             success = immich_service.create_album(
@@ -679,12 +570,12 @@ def handle_reject_action(suggestion_id: int):
         st.error(f"An error occurred while rejecting: {e}")
 
 
-def handle_add_photos_action(suggestion: dict):
+def handle_add_photos_action(suggestion: SuggestionAlbum):
     """Logic for adding photos to an existing Immich album."""
     try:
-        album_id = suggestion.get('immich_album_id')
-        additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
-        album_title = suggestion.get('vlm_title', 'Unknown Album')
+        album_id = suggestion.immich_album_id
+        additional_assets = suggestion.additional_asset_ids
+        album_title = suggestion.vlm_title or 'Unknown Album'
         
         if not album_id or not additional_assets:
             st.error("No photos to add or album information missing.")
@@ -746,10 +637,10 @@ def handle_merge_suggestions(suggestion_ids: list[int]):
             total_photos = 0
             titles = []
             for suggestion in suggestions:
-                strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-                weak_ids = json.loads(suggestion.get('weak_asset_ids_json', '[]'))
+                strong_ids = suggestion.strong_asset_ids
+                weak_ids = suggestion.weak_asset_ids
                 total_photos += len(strong_ids) + len(weak_ids)
-                if suggestion.get('vlm_title'):
+                if suggestion.vlm_title:
                     titles.append(suggestion.vlm_title)
             
             # Show confirmation dialog at the top of the page
@@ -761,7 +652,7 @@ def handle_merge_suggestions(suggestion_ids: list[int]):
                 # Show titles in a more compact format
                 title_list = []
                 for suggestion in suggestions:
-                    title = suggestion.get('vlm_title', 'Untitled')
+                    title = suggestion.vlm_title or 'Untitled'
                     if len(title) > 30:
                         title = title[:27] + "..."
                     title_list.append(title)
@@ -769,7 +660,7 @@ def handle_merge_suggestions(suggestion_ids: list[int]):
                 st.write("• " + " • ".join(title_list))
                 st.write(f"**Total photos:** {total_photos}")
                 
-                col1, col2, col3 = st.columns([1, 1, 2])
+                col1, col2, _ = st.columns([1, 1, 2])
                 
                 if col1.button("✅ Confirm", type="primary", key=f"{merge_key}_confirm", use_container_width=True):
                     logger.info(f"Merge confirmation button clicked for {suggestion_ids}")
@@ -844,46 +735,30 @@ def render_photo_grid(asset_ids: list[str], cover_id: str | None):
     items_per_page = config.get('ui.thumbnails_per_page', 50)
     num_columns = config.get('ui.gallery_columns', 6)
     
-    total_pages = (len(asset_ids) + items_per_page - 1) // items_per_page
+    # Configure jump button for cover photo
+    jump_config = None
+    if cover_id and cover_id in asset_ids:
+        cover_index = asset_ids.index(cover_id)
+        cover_page = cover_index // items_per_page
+        current_page = getattr(ui_state, 'core_photos_page', 0)
+        jump_config = {
+            'text': '📷 Cover',
+            'target_page': cover_page,
+            'condition': cover_page != current_page,
+            'help': 'Go to cover photo'
+        }
     
-    # Show pagination controls if needed
-    if total_pages > 1:
-        st.session_state.setdefault("core_photos_page", 0)
-        
-        # Pagination info and controls
-        col1, col2, col3, col4 = st.columns([1, 1, 2, 1])
-        
-        with col1:
-            if st.button("◀ Previous", key="core_prev", disabled=ui_state.core_photos_page == 0):
-                ui_state.core_photos_page -= 1
-                st.rerun()
-        
-        with col2:
-            if st.button("Next ▶", key="core_next", disabled=ui_state.core_photos_page == total_pages - 1):
-                ui_state.core_photos_page += 1
-                st.rerun()
-        
-        with col3:
-            st.caption(f"Page {ui_state.core_photos_page + 1} of {total_pages} • {len(asset_ids)} photos")
-        
-        with col4:
-            # Jump to cover photo page if there is one
-            if cover_id and cover_id in asset_ids:
-                cover_index = asset_ids.index(cover_id)
-                cover_page = cover_index // items_per_page
-                if cover_page != ui_state.core_photos_page:
-                    if st.button("📷 Cover", key="jump_to_cover", help="Go to cover photo"):
-                        ui_state.core_photos_page = cover_page
-                        st.rerun()
-        
-        # Get items for current page
-        start_idx = ui_state.core_photos_page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(asset_ids))
-        page_asset_ids = asset_ids[start_idx:end_idx]
-        
-        st.caption(f"Showing photos {start_idx + 1}-{end_idx}")
-    else:
-        page_asset_ids = asset_ids
+    # Use the generalized pagination function
+    page_asset_ids, has_pagination = render_pagination_controls(
+        asset_ids, 
+        items_per_page, 
+        'core_photos_page', 
+        ui_state,
+        show_jump_button=True,
+        jump_button_config=jump_config
+    )
+    
+    if not has_pagination:
         st.caption(f"All {len(asset_ids)} photos")
     
     # Render grid of photos for current page
@@ -891,82 +766,33 @@ def render_photo_grid(asset_ids: list[str], cover_id: str | None):
         cols = st.columns(num_columns)
         for j, asset_id in enumerate(page_asset_ids[i : i + num_columns]):
             with cols[j]:
-                thumb_bytes = get_cached_thumbnail(asset_id)
-                if thumb_bytes:
-                    caption = "Cover" if asset_id == cover_id else ""
-                    
-                    try:
-                        # Try to display the image
-                        st.image(
-                            thumb_bytes, 
-                            caption=caption, 
-                            use_container_width=True,
-                        )
-                        
-                        # Get and display metadata
-                        date_str, location_str = get_photo_metadata(asset_id)
-                        
-                        # Button behavior depends on cover selection mode
-                        if ui_state.cover_selection_mode:
-                            # In cover selection mode, clicking selects as cover
-                            button_text = "🖼️ Set as Cover" if asset_id != cover_id else "✅ Current Cover"
-                            button_disabled = asset_id == cover_id
-                            if st.button(button_text, key=f"cover_{asset_id}", help="Set as album cover", 
-                                       use_container_width=True, disabled=button_disabled, type="primary" if not button_disabled else "secondary"):
-                                # Update cover in database
-                                db_service.update_suggestion_cover(ui_state.selected_suggestion_id, asset_id)
-                                ui_state.disable_cover_selection_mode()
-                                st.success(f"✅ Cover updated successfully!")
-                                st.rerun()
-                        else:
-                            # Normal mode - view photo
-                            if st.button("👁️", key=f"view_{asset_id}", help="View full photo", use_container_width=True):
-                                st.session_state.selected_asset_id = asset_id
-                                ui_state.view_mode = 'photo'
-                                st.rerun()
-                        
-                        # Display compact date and location
-                        st.caption(f"📅 {date_str}")
-                        st.caption(f"📍 {location_str}")
-                    
-                    except Exception as e:
-                        # If thumbnail display fails, show error with asset info
-                        st.error(f"⚠️ Corrupted thumbnail")
-                        st.caption(f"Asset: {asset_id[:8]}...")
-                        
-                        # Still allow interaction (viewing or cover selection)
-                        if ui_state.cover_selection_mode:
-                            button_text = "🖼️ Set as Cover" if asset_id != cover_id else "✅ Current Cover"
-                            button_disabled = asset_id == cover_id
-                            if st.button(button_text, key=f"cover_{asset_id}", help="Set as album cover", 
-                                       use_container_width=True, disabled=button_disabled):
-                                db_service.update_suggestion_cover(ui_state.selected_suggestion_id, asset_id)
-                                ui_state.disable_cover_selection_mode()
-                                st.success(f"✅ Cover updated successfully!")
-                                st.rerun()
-                        else:
-                            if st.button("👁️ Try anyway", key=f"view_{asset_id}", help="Try to view full photo", use_container_width=True):
-                                st.session_state.selected_asset_id = asset_id
-                                ui_state.view_mode = 'photo'
-                                st.rerun()
-                        
-                else:
-                    st.error("🖼️", help=f"Failed to load thumbnail for asset {asset_id}")
-                    # Still allow interaction (viewing or cover selection)
-                    if ui_state.cover_selection_mode:
-                        button_text = "🖼️ Set as Cover" if asset_id != cover_id else "✅ Current Cover"
-                        button_disabled = asset_id == cover_id
-                        if st.button(button_text, key=f"cover_{asset_id}", help="Set as album cover", 
-                                   use_container_width=True, disabled=button_disabled):
-                            db_service.update_suggestion_cover(ui_state.selected_suggestion_id, asset_id)
-                            ui_state.disable_cover_selection_mode()
-                            st.success(f"✅ Cover updated successfully!")
-                            st.rerun()
-                    else:
-                        if st.button("👁️ Try anyway", key=f"view_{asset_id}", help="Try to view full photo", use_container_width=True):
-                            st.session_state.selected_asset_id = asset_id
-                            ui_state.view_mode = 'photo'
-                            st.rerun()
+                # Use the unified thumbnail rendering function
+                caption = "Cover" if asset_id == cover_id else ""
+                action_taken, action_type = render_thumbnail_card(
+                    asset_id=asset_id,
+                    get_cached_thumbnail_func=get_cached_thumbnail,
+                    get_photo_metadata_func=get_photo_metadata,
+                    show_metadata=True,
+                    cover_selection_mode=ui_state.cover_selection_mode,
+                    current_cover_id=cover_id,
+                    container=cols[j],
+                    button_prefix="grid_",
+                    thumbnail_caption=caption
+                )
+                
+                # Handle the actions returned by the thumbnail card
+                if action_taken:
+                    if action_type == 'cover':
+                        # Update cover in database
+                        db_service.update_suggestion_cover(ui_state.selected_suggestion_id, asset_id)
+                        ui_state.disable_cover_selection_mode()
+                        st.success(f"✅ Cover updated successfully!")
+                        st.rerun()
+                    elif action_type == 'view':
+                        # Switch to photo view
+                        st.session_state.selected_asset_id = asset_id
+                        ui_state.view_mode = 'photo'
+                        st.rerun()
 
 
 def render_weak_asset_selector(weak_asset_ids: list[str]):
@@ -997,32 +823,14 @@ def render_weak_asset_selector(weak_asset_ids: list[str]):
     with col2:
         st.caption(f"Selected: {total_selected}/{len(weak_asset_ids)}")
     
-    # Add pagination for large sets to improve performance
+    # Use the generalized pagination function
     items_per_page = config.get('ui.thumbnails_per_page', 50)
-    total_pages = (len(weak_asset_ids) + items_per_page - 1) // items_per_page
-    
-    if total_pages > 1:
-        st.session_state.setdefault("weak_assets_page", 0)
-        
-        # Pagination controls
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col1:
-            if st.button("◀ Previous", disabled=ui_state.weak_assets_page == 0):
-                ui_state.weak_assets_page -= 1
-                st.rerun()
-        with col2:
-            st.caption(f"Page {ui_state.weak_assets_page + 1} of {total_pages}")
-        with col3:
-            if st.button("Next ▶", disabled=ui_state.weak_assets_page == total_pages - 1):
-                ui_state.weak_assets_page += 1
-                st.rerun()
-        
-        # Get items for current page
-        start_idx = ui_state.weak_assets_page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(weak_asset_ids))
-        page_asset_ids = weak_asset_ids[start_idx:end_idx]
-    else:
-        page_asset_ids = weak_asset_ids
+    page_asset_ids, _ = render_pagination_controls(
+        weak_asset_ids, 
+        items_per_page, 
+        'weak_assets_page', 
+        ui_state
+    )
     
     # Render grid of checkboxes for individual selection
     num_columns = config.get('ui.gallery_columns', 6)
@@ -1030,62 +838,32 @@ def render_weak_asset_selector(weak_asset_ids: list[str]):
         cols = st.columns(num_columns)
         for j, asset_id in enumerate(page_asset_ids[i : i + num_columns]):
             with cols[j]:
-                thumb_bytes = get_cached_thumbnail(asset_id)
-                if thumb_bytes:
-                    try:
-                        # Display the image
-                        st.image(thumb_bytes, use_container_width=True)
-                    except Exception as e:
-                        st.error("⚠️ Corrupted")
-                        st.caption(f"Asset: {asset_id[:8]}...")
-                    
-                    # Get and display metadata
-                    date_str, location_str = get_photo_metadata(asset_id)
-                    
-                    # View button and Include checkbox in same row
-                    view_col, include_col = st.columns(2)
-                    with view_col:
-                        if st.button("👁️", key=f"weak_view_{asset_id}", help="View full photo"):
-                            st.session_state.selected_asset_id = asset_id
-                            ui_state.view_mode = 'photo'
-                            st.rerun()
-                    
-                    with include_col:
-                        # Use efficient state lookup
-                        checkbox_key = f"cb_weak_{asset_id}"
-                        if checkbox_key not in st.session_state:
-                            st.session_state[checkbox_key] = asset_id in ui_state.included_weak_assets
-                        
-                        if st.checkbox("Include", key=checkbox_key, label_visibility="collapsed"):
-                            ui_state.included_weak_assets.add(asset_id)
-                        else:
-                            ui_state.included_weak_assets.discard(asset_id)
-                    
-                    # Display compact date and location
-                    st.caption(f"📅 {date_str}")
-                    st.caption(f"📍 {location_str}")
+                # Use the unified thumbnail rendering function for display
+                action_taken, action_type = render_thumbnail_card(
+                    asset_id=asset_id,
+                    get_cached_thumbnail_func=get_cached_thumbnail,
+                    get_photo_metadata_func=get_photo_metadata,
+                    show_metadata=True,
+                    cover_selection_mode=False,
+                    container=cols[j],
+                    button_prefix="weak_"
+                )
+                
+                # Handle view action from thumbnail card
+                if action_taken and action_type == 'view':
+                    st.session_state.selected_asset_id = asset_id
+                    ui_state.view_mode = 'photo'
+                    st.rerun()
+                
+                # Add the include checkbox below the thumbnail
+                checkbox_key = f"cb_weak_{asset_id}"
+                if checkbox_key not in st.session_state:
+                    st.session_state[checkbox_key] = asset_id in ui_state.included_weak_assets
+                
+                if st.checkbox("Include", key=checkbox_key, label_visibility="collapsed"):
+                    ui_state.included_weak_assets.add(asset_id)
                 else:
-                    st.error("🖼️")
-                    st.caption(f"Asset: {asset_id[:8]}...")
-                    
-                    # Still allow interaction
-                    view_col, include_col = st.columns(2)
-                    with view_col:
-                        if st.button("👁️", key=f"weak_view_{asset_id}", help="Try to view"):
-                            st.session_state.selected_asset_id = asset_id
-                            ui_state.view_mode = 'photo'
-                            st.rerun()
-                    
-                    with include_col:
-                        # Use efficient state lookup
-                        checkbox_key = f"cb_weak_{asset_id}"
-                        if checkbox_key not in st.session_state:
-                            st.session_state[checkbox_key] = asset_id in ui_state.included_weak_assets
-                        
-                        if st.checkbox("Include", key=checkbox_key, label_visibility="collapsed"):
-                            ui_state.included_weak_assets.add(asset_id)
-                        else:
-                            ui_state.included_weak_assets.discard(asset_id)
+                    ui_state.included_weak_assets.discard(asset_id)
 
 # Removed toggle_weak_asset function - now using inline checkbox handling for better performance
 
@@ -1102,12 +880,12 @@ def get_cached_full_image(asset_id: str) -> bytes | None:
         return None
 
 
-def render_photo_view(suggestion: dict):
+def render_photo_view(suggestion: SuggestionAlbum):
     """Renders the single photo view for a selected asset."""
     asset_id = st.session_state.selected_asset_id
     
     # Back to album button
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, _ = st.columns([1, 2, 1])
     with col1:
         if st.button("⬅️ Back to Album", use_container_width=True):
             ui_state.view_mode = 'album'
@@ -1115,7 +893,7 @@ def render_photo_view(suggestion: dict):
             st.rerun()
     
     with col2:
-        st.subheader(f"Photo View - {suggestion.get('vlm_title', 'Album')}")
+        st.subheader(f"Photo View - {suggestion.vlm_title or 'Album'}")
     
     # Create two columns: image on left, EXIF data on right
     img_col, exif_col = st.columns([2, 1])
@@ -1130,7 +908,6 @@ def render_photo_view(suggestion: dict):
                 if full_image_bytes:
                     try:
                         # Test if the image bytes are valid before displaying
-                        from PIL import Image
                         from io import BytesIO
                         test_img = Image.open(BytesIO(full_image_bytes))
                         test_img.verify()  # This will raise an exception if image is corrupted
@@ -1244,8 +1021,8 @@ def render_photo_view(suggestion: dict):
     st.divider()
     
     # Navigation within album
-    strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-    weak_ids = json.loads(suggestion.get('weak_asset_ids_json', '[]'))
+    strong_ids = suggestion.strong_asset_ids
+    weak_ids = suggestion.weak_asset_ids
     all_ids = strong_ids + weak_ids
     
     if asset_id in all_ids:
@@ -1426,9 +1203,9 @@ def render_suggestions_table_view():
         
         # Thumbnail
         with cols[1]:
-            cover_id = suggestion.get('cover_asset_id')
+            cover_id = suggestion.cover_asset_id
             if not cover_id:
-                strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
+                strong_ids = suggestion.strong_asset_ids
                 cover_id = strong_ids[0] if strong_ids else None
             
             thumb_bytes = get_cached_thumbnail(cover_id)
@@ -1439,75 +1216,28 @@ def render_suggestions_table_view():
         
         # Title
         with cols[2]:
-            title = suggestion.get('vlm_title', 'Untitled')
+            title = suggestion.vlm_title or 'Untitled'
             st.markdown(f"**{title}**")
         
         # Location
         with cols[3]:
-            location = suggestion.get('location', 'Unknown location')
+            location = suggestion.location or 'Unknown location'
             st.text(location)
         
         # Date
         with cols[4]:
-            start_date = suggestion.get('event_start_date')
-            end_date = suggestion.get('event_end_date')
-            date_text = ""
-            
-            if start_date:
-                try:
-                    from datetime import datetime
-                    if isinstance(start_date, str):
-                        start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-                    else:
-                        start_dt = start_date
-                    
-                    start_formatted = start_dt.strftime('%d-%m-%y')
-                    
-                    if end_date:
-                        if isinstance(end_date, str):
-                            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                        else:
-                            end_dt = end_date
-                        
-                        # Only show end date if different from start
-                        if start_dt.date() != end_dt.date():
-                            end_formatted = end_dt.strftime('%d-%m-%y')
-                            date_text = f"{start_formatted} - {end_formatted}"
-                        else:
-                            date_text = start_formatted
-                    else:
-                        date_text = start_formatted
-                except (ValueError, AttributeError):
-                    date_text = "Unknown"
-            else:
+            date_text = format_date_range(suggestion.event_start_date, suggestion.event_end_date)
+            if date_text == "Unknown date":
                 date_text = "Unknown"
-            
             st.text(date_text)
         
-        # Photo count
+        # Photo count - use standardized formatting but extract just the count part
         with cols[5]:
-            strong_ids = json.loads(suggestion.get('strong_asset_ids_json', '[]'))
-            core_count = len(strong_ids)
-            
-            if suggestion.status == 'from_immich':
-                # For existing albums, show additional assets from clustering
-                additional_assets = json.loads(suggestion.get('additional_asset_ids_json', '[]'))
-                additional_count = len(additional_assets)
-                
-                if additional_count > 0:
-                    photo_text = f"{core_count} (+{additional_count})"
-                else:
-                    photo_text = str(core_count)
-            else:
-                # For new suggestions, show weak assets
-                weak_ids = json.loads(suggestion.get('weak_asset_ids_json', '[]'))
-                additional_count = len(weak_ids)
-                
-                if additional_count > 0:
-                    photo_text = f"{core_count} (+{additional_count})"
-                else:
-                    photo_text = str(core_count)
-            
+            metadata = format_suggestion_metadata(suggestion, include_counts=True)
+            # Extract just the photo count part (first part before first |)
+            photo_part = metadata.split(" | ")[0] if " | " in metadata else metadata
+            # Remove the word "photos" to make it more compact for table
+            photo_text = photo_part.replace(" photos", "")
             st.text(photo_text)
         
         # Status

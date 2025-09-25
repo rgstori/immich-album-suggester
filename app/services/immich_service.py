@@ -15,6 +15,7 @@ from .config_service import config
 from .. import immich_db, immich_api
 from ..exceptions import ImmichDBError, ImmichAPIError
 from ..models import ImmichAlbum, album_from_api_response
+from ..utils import parse_datetime_safe, service_error_handler
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class ImmichService:
             logger.critical("Failed to initialize Immich API client.", exc_info=True)
             raise ImmichAPIError("Could not initialize Immich API client.") from e
 
+    @service_error_handler("fetch assets for clustering")
     def fetch_assets_for_clustering(self, excluded_ids: list[str]) -> pd.DataFrame:
         """
         Fetches all asset metadata and embeddings required for clustering.
@@ -56,16 +58,11 @@ class ImmichService:
             ImmichDBError: If the database query fails.
         """
         logger.info(f"Fetching assets for clustering, excluding {len(excluded_ids)} IDs.")
-        try:
-            pg_conn = immich_db.get_connection()
-            # The fetch_assets function from the original module handles its own connection closing.
-            df = immich_db.fetch_assets(pg_conn, config.yaml, excluded_ids)
-            logger.info(f"Successfully fetched {len(df)} new assets from Immich DB.")
-            return df
-        except Exception as e:
-            logger.error("Failed to fetch assets via direct DB connection.", exc_info=True)
-            # Chain the original exception for full context.
-            raise ImmichDBError("A failure occurred while fetching assets from the Immich database.") from e
+        pg_conn = immich_db.get_connection()
+        # The fetch_assets function from the original module handles its own connection closing.
+        df = immich_db.fetch_assets(pg_conn, config.yaml, excluded_ids)
+        logger.info(f"Successfully fetched {len(df)} new assets from Immich DB.")
+        return df
 
     def get_thumbnail_bytes(self, asset_id: str) -> bytes | None:
         """
@@ -105,6 +102,7 @@ class ImmichService:
             logger.warning(f"Failed to download full image for asset {asset_id}.", exc_info=True)
             return None
             
+    @service_error_handler("fetch EXIF data", default_return=None, raise_on_error=False)
     def get_exif_data(self, asset_id: str) -> dict | None:
         """
         Fetches EXIF data for a single asset via direct DB connection.
@@ -116,12 +114,8 @@ class ImmichService:
             A dictionary of EXIF data, or None if not found.
         """
         logger.debug(f"Fetching EXIF for asset {asset_id}.")
-        try:
-            # get_exif_for_asset handles its own connection.
-            return immich_db.get_exif_for_asset(config.yaml, asset_id)
-        except Exception as e:
-            logger.error(f"Failed to fetch EXIF data for asset {asset_id}.", exc_info=True)
-            raise ImmichDBError(f"Could not fetch EXIF for asset {asset_id}.") from e
+        # get_exif_for_asset handles its own connection.
+        return immich_db.get_exif_for_asset(config.yaml, asset_id)
 
     def create_album(self, title: str, asset_ids: list[str], cover_asset_id: str, highlight_ids: list[str]) -> bool:
         """
@@ -369,13 +363,9 @@ class ImmichService:
                     date_taken = exif_info.get('dateTimeOriginal') or asset.get('fileCreatedAt')
                     
                     if date_taken:
-                        try:
-                            if isinstance(date_taken, str):
-                                # Handle ISO format dates
-                                date_obj = datetime.fromisoformat(date_taken.replace('Z', '+00:00'))
-                                dates.append(date_obj)
-                        except (ValueError, TypeError):
-                            pass
+                        date_obj = parse_datetime_safe(date_taken)
+                        if date_obj:
+                            dates.append(date_obj)
                     
                     # Extract location from EXIF data if available
                     if exif_info:

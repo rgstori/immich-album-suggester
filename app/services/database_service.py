@@ -8,12 +8,14 @@ maintain and test. It handles the lifecycle of suggestions and scan logs.
 import sqlite3
 import json
 import logging
+import warnings
 from datetime import datetime
 from contextlib import contextmanager
-from typing import Any, Literal, Optional, List, Dict, Iterator
+from typing import Any, Optional, List, Dict, Iterator
 from .config_service import config
 from ..exceptions import DatabaseError
-from ..models import SuggestionAlbum, SuggestionStatus, suggestion_from_db_row, ClusteringCandidate, VLMAnalysis
+from ..models import SuggestionAlbum, SuggestionStatus, suggestion_from_db_row, ClusteringCandidate
+from ..utils import parse_datetime_safe, service_error_handler
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +155,8 @@ class DatabaseService:
     def store_initial_suggestion(self, candidate: Dict[str, Any], location: Optional[str]) -> int:
         """
         Stores a new album candidate found by the clustering pass.
+        
+        DEPRECATED: Use store_clustering_candidate() for type-safe DTO-based storage.
 
         Args:
             candidate: A dictionary containing the clustered asset data.
@@ -164,6 +168,11 @@ class DatabaseService:
         Raises:
             DatabaseError: If the suggestion could not be stored.
         """
+        warnings.warn(
+            "store_initial_suggestion() is deprecated. Use store_clustering_candidate() with ClusteringCandidate DTO instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -194,11 +203,18 @@ class DatabaseService:
     def update_suggestion_with_analysis(self, suggestion_id: int, analysis: Dict[str, Any]) -> None:
         """
         Updates a suggestion with VLM results and sets status to 'pending' for review.
+        
+        DEPRECATED: Use update_suggestion_from_dto() with SuggestionAlbum DTO instead.
 
         Args:
             suggestion_id: The ID of the suggestion to update.
             analysis: A dictionary containing 'vlm_title', 'vlm_description', and 'cover_asset_id'.
         """
+        warnings.warn(
+            "update_suggestion_with_analysis() is deprecated. Use update_suggestion_from_dto() with SuggestionAlbum DTO instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -366,24 +382,16 @@ class DatabaseService:
                     
                     if start_date:
                         if isinstance(start_date, str):
-                            from datetime import datetime
-                            try:
-                                start_date = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
-                            except ValueError:
-                                start_date = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S.%f')
+                            start_date = parse_datetime_safe(start_date)
                         
-                        if earliest_date is None or start_date < earliest_date:
+                        if start_date and (earliest_date is None or start_date < earliest_date):
                             earliest_date = start_date
                     
                     if end_date:
                         if isinstance(end_date, str):
-                            from datetime import datetime
-                            try:
-                                end_date = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
-                            except ValueError:
-                                end_date = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S.%f')
+                            end_date = parse_datetime_safe(end_date)
                         
-                        if latest_date is None or end_date > latest_date:
+                        if end_date and (latest_date is None or end_date > latest_date):
                             latest_date = end_date
                     
                     # Collect locations
@@ -439,22 +447,19 @@ class DatabaseService:
             logger.error(f"Failed to merge suggestions {suggestion_ids}.", exc_info=True)
             raise DatabaseError("Could not merge suggestions.") from e
             
+    @service_error_handler("retrieve processed asset IDs")
     def get_processed_asset_ids(self) -> List[str]:
         """Gets all asset IDs that are already part of any existing suggestion."""
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT strong_asset_ids_json, weak_asset_ids_json FROM suggestions")
-                rows = cursor.fetchall()
-                
-                processed_ids = set()
-                for strong_json, weak_json in rows:
-                    processed_ids.update(json.loads(strong_json or '[]'))
-                    processed_ids.update(json.loads(weak_json or '[]'))
-                return list(processed_ids)
-        except Exception as e:
-            logger.error("Failed to get processed asset IDs.", exc_info=True)
-            raise DatabaseError("Could not retrieve processed asset IDs.") from e
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT strong_asset_ids_json, weak_asset_ids_json FROM suggestions")
+            rows = cursor.fetchall()
+            
+            processed_ids = set()
+            for strong_json, weak_json in rows:
+                processed_ids.update(json.loads(strong_json or '[]'))
+                processed_ids.update(json.loads(weak_json or '[]'))
+            return list(processed_ids)
 
     def log_to_db(self, level: str, message: str) -> None:
         """Writes a log entry to the SQLite database for the UI to display."""
@@ -484,6 +489,8 @@ class DatabaseService:
         Stores an existing Immich album as a suggestion with 'from_immich' status.
         Prevents duplicates by checking if the album already exists.
         
+        DEPRECATED: Use store_suggestion_from_dto() with ImmichAlbum.to_suggestion_album() instead.
+        
         Args:
             album_data: Dictionary containing album metadata from Immich API
             
@@ -493,6 +500,11 @@ class DatabaseService:
         Raises:
             DatabaseError: If the suggestion could not be stored.
         """
+        warnings.warn(
+            "store_immich_album_as_suggestion() is deprecated. Use store_suggestion_from_dto() with ImmichAlbum.to_suggestion_album() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()

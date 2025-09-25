@@ -131,7 +131,7 @@ def run_clustering_pass(mode: str):
     for candidate in album_candidates:
         # Geocoding is part of the initial storage step.
         location_str = geocoding.get_primary_location(candidate.gps_coords)
-        db_service.store_initial_suggestion(candidate.to_dict(), location_str)
+        db_service.store_clustering_candidate(candidate, location_str)
     
     # STEP 4: Find potential additions to existing albums (cross-album suggestions)
     # This happens after new album clustering to potentially suggest photos from new candidates

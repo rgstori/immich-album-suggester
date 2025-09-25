@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any, Literal, Union
 import json
 import logging
+from ..utils import parse_datetime_safe
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +60,11 @@ class PhotoAsset:
         """Create PhotoAsset from dictionary data."""
         # Handle datetime fields
         for date_field in ['file_created_at', 'date_time_original']:
-            if data.get(date_field) and isinstance(data[date_field], str):
-                try:
-                    data[date_field] = datetime.fromisoformat(data[date_field].replace('Z', '+00:00'))
-                except ValueError:
+            if data.get(date_field):
+                parsed_date = parse_datetime_safe(data[date_field])
+                if parsed_date is None and data[date_field]:
                     logger.warning(f"Could not parse date field {date_field}: {data[date_field]}")
-                    data[date_field] = None
+                data[date_field] = parsed_date
         
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
@@ -139,15 +139,11 @@ class SuggestionAlbum:
         
         # Handle datetime fields
         for date_field in ['created_at', 'event_start_date', 'event_end_date']:
-            if data.get(date_field) and isinstance(data[date_field], str):
-                try:
-                    data[date_field] = datetime.fromisoformat(data[date_field].replace('Z', '+00:00'))
-                except ValueError:
-                    try:
-                        data[date_field] = datetime.strptime(data[date_field], '%Y-%m-%d %H:%M:%S.%f')
-                    except ValueError:
-                        logger.warning(f"Could not parse date field {date_field}: {data[date_field]}")
-                        data[date_field] = None
+            if data.get(date_field):
+                parsed_date = parse_datetime_safe(data[date_field])
+                if parsed_date is None and data[date_field]:
+                    logger.warning(f"Could not parse date field {date_field}: {data[date_field]}")
+                data[date_field] = parsed_date
         
         # Convert JSON strings to lists
         for field, json_field in [
@@ -176,11 +172,20 @@ class SuggestionAlbum:
         """Create SuggestionAlbum from clustering algorithm output."""
         if hasattr(candidate, 'strong_asset_ids'):
             # It's a ClusteringCandidate DTO
+            # Convert pandas Timestamp to datetime if needed
+            start_date = candidate.min_date
+            if hasattr(start_date, 'to_pydatetime'):
+                start_date = start_date.to_pydatetime()
+            
+            end_date = candidate.max_date or candidate.min_date
+            if hasattr(end_date, 'to_pydatetime'):
+                end_date = end_date.to_pydatetime()
+            
             return cls(
                 status='pending_enrichment',
                 created_at=datetime.now(),
-                event_start_date=candidate.min_date,
-                event_end_date=candidate.max_date or candidate.min_date,
+                event_start_date=start_date,
+                event_end_date=end_date,
                 location=location,
                 strong_asset_ids=candidate.strong_asset_ids,
                 weak_asset_ids=candidate.weak_asset_ids,
@@ -225,11 +230,20 @@ class ImmichAlbum:
     
     def to_suggestion_album(self) -> SuggestionAlbum:
         """Convert to a SuggestionAlbum for unified handling."""
+        # Convert pandas Timestamp to datetime if needed
+        start_date = self.start_date
+        if hasattr(start_date, 'to_pydatetime'):
+            start_date = start_date.to_pydatetime()
+        
+        end_date = self.end_date
+        if hasattr(end_date, 'to_pydatetime'):
+            end_date = end_date.to_pydatetime()
+        
         return SuggestionAlbum(
             status='from_immich',
             created_at=datetime.now(),
-            event_start_date=self.start_date,
-            event_end_date=self.end_date,
+            event_start_date=start_date,
+            event_end_date=end_date,
             location=self.location,
             vlm_title=self.title,
             vlm_description=self.description,
@@ -249,12 +263,11 @@ class ImmichAlbum:
         """Create ImmichAlbum from dictionary data."""
         # Handle datetime fields
         for date_field in ['start_date', 'end_date']:
-            if data.get(date_field) and isinstance(data[date_field], str):
-                try:
-                    data[date_field] = datetime.fromisoformat(data[date_field].replace('Z', '+00:00'))
-                except ValueError:
+            if data.get(date_field):
+                parsed_date = parse_datetime_safe(data[date_field])
+                if parsed_date is None and data[date_field]:
                     logger.warning(f"Could not parse date field {date_field}: {data[date_field]}")
-                    data[date_field] = None
+                data[date_field] = parsed_date
         
         # Only include fields that exist in the dataclass
         filtered_data = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
@@ -316,12 +329,11 @@ class ClusteringCandidate:
         """Create ClusteringCandidate from dictionary data."""
         # Handle datetime fields
         for date_field in ['min_date', 'max_date']:
-            if data.get(date_field) and isinstance(data[date_field], str):
-                try:
-                    data[date_field] = datetime.fromisoformat(data[date_field].replace('Z', '+00:00'))
-                except ValueError:
+            if data.get(date_field):
+                parsed_date = parse_datetime_safe(data[date_field])
+                if parsed_date is None and data[date_field]:
                     logger.warning(f"Could not parse date field {date_field}: {data[date_field]}")
-                    data[date_field] = None
+                data[date_field] = parsed_date
         
         filtered_data = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         return cls(**filtered_data)

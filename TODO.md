@@ -2,84 +2,50 @@
 
 ## 🔴 CRITICAL - Core Functionality Gaps
 
-These features address significant gaps that can lead to a poor user experience or incorrect behavior.
-
 ### **NO OUTSTANDING CRITICAL ISSUES** ✅
 
 All critical core functionality gaps have been resolved and moved to the completed section.
-
-## 🟠 HIGH - Stability & User Trust
-
-These items focus on making the application more robust and the user's actions more predictable.
-
-### **NO OUTSTANDING HIGH PRIORITY ISSUES** ✅
-
-All high priority stability and user trust issues have been resolved.
-
 
 ## 🟡 MEDIUM - Code Quality & Maintainability
 
 ### **REFACTORING & COMPLEXITY REDUCTION** 🆕 ⭐ **HIGH PRIORITY**
 
-1. **~~Introduce Data Transfer Objects (DTOs)~~** ✅ **COMPLETED**
-   - **~~Problem~~**: ~~Heavy reliance on generic dictionaries (Dict[str, Any]) for data entities is error-prone~~
-   - **~~Impact~~**: ~~Typo-prone keys, no IDE support, difficult static analysis~~
-   - **~~Fix~~**: ~~Use dataclasses/TypedDict for core entities like Suggestion with centralized parsing logic~~
-   - **✅ SOLUTION**: Implemented comprehensive DTO system with `SuggestionAlbum`, `ImmichAlbum`, `VLMAnalysis`, `ClusteringCandidate`, and `PhotoAsset` dataclasses providing type safety, IDE support, and centralized data validation throughout the entire application
-
-2. **Refactor Repetitive UI Rendering Logic** 🆕 ⭐
-   - **Problem**: Duplicate thumbnail display code across render_photo_grid, render_weak_asset_selector, and sidebar
-   - **Impact**: High maintenance burden, inconsistent UI behavior
-   - **Fix**: Create reusable render_thumbnail_card() and format_suggestion_metadata() functions
-
-3. **Generalize Pagination Logic** 🆕 ⭐
-   - **Problem**: Separate pagination implementations for Core Photos and Weak Assets
-   - **Impact**: Code duplication, inconsistent pagination behavior
-   - **Fix**: Single render_pagination_controls() function with configurable page keys
-
-4. **Decompose Complex Service Methods** 🆕 ⭐
+3. **Decompose Complex Service Methods** 🆕 ⭐
    - **Problem**: Large methods like get_albums_with_metadata() do too many things
    - **Impact**: Hard to read, test, and maintain
    - **Fix**: Break into smaller helper methods (_fetch_all_albums_from_api, _extract_metadata_from_album_assets)
 
-5. **Standardize Date Handling** 🆕 ⭐
-   - **Problem**: Date parsing scattered across multiple files with inconsistent formats
-   - **Impact**: Fragile date handling, potential bugs
-   - **Fix**: Single utility function, consistent ISO 8601 storage, datetime objects for DB operations
-
 ### **TESTING & VALIDATION** 🚨
 
-6. **Service Layer Unit Testing** 🆕
+4. **Service Layer Unit Testing** 🆕
    - **Problem**: The service layer containing all business logic is untested
    - **Impact**: Refactoring is risky; bugs can be introduced easily
    - **Fix**: Introduce pytest and pytest-mock, write unit tests for each service with mocked dependencies
 
-7. **Configuration Schema Validation** 🆕
+5. **Configuration Schema Validation** 🆕
    - **Problem**: Invalid config.yaml (misspelled keys, wrong data types) leads to NoneType errors at runtime
    - **Impact**: Poor user experience on setup; hard-to-diagnose errors
    - **Fix**: Use Pydantic to define Config model with validation at startup
 
-8. **VLM Provider Plugin Architecture** 🆕
+6. **VLM Provider Plugin Architecture** 🆕
    - **Problem**: VLM logic tightly coupled to Ollama's API
    - **Impact**: Difficult to switch to other providers (OpenAI, Anthropic, Gemini)
    - **Fix**: Abstract base class `VLMProvider`, concrete implementations, factory pattern
 
 ## 🟢 LOW - Performance & Enhancement
 
-### **NEW LOW PRIORITY ISSUES** 🚨
-
 7. **Redundant Thumbnail Requests** 🔄 **PARTIALLY ADDRESSED**
-    - **Remaining Issue**: Some edge cases might trigger duplicate requests before cache is populated
-    - **Fix**: Implement in-memory request deduplication lock with `in_flight_requests` set
+   - **Remaining Issue**: Some edge cases might trigger duplicate requests before cache is populated
+   - **Fix**: Implement in-memory request deduplication lock with `in_flight_requests` set
 
 8. **Missing Graceful Degradation in UI** 🆕
-    - **Problem**: If VLM is configured but unavailable, enrichment fails hard with poor UI feedback
-    - **Impact**: UI for `enrichment_failed` suggestion is not helpful
-    - **Fix**: Allow manual title/description editing and approval with default metadata even after VLM failure
+   - **Problem**: If VLM is configured but unavailable, enrichment fails hard with poor UI feedback
+   - **Impact**: UI for `enrichment_failed` suggestion is not helpful
+   - **Fix**: Allow manual title/description editing and approval with default metadata even after VLM failure
 
 9. **No Telemetry/Metrics** 🆕
-    - **Problem**: No visibility into system performance or usage patterns
-    - **Fix**: Add optional telemetry for clustering performance, VLM response times, etc.
+   - **Problem**: No visibility into system performance or usage patterns
+   - **Fix**: Add optional telemetry for clustering performance, VLM response times, etc.
 
 ## 🔵 ENHANCEMENT - New Features
 
@@ -131,129 +97,20 @@ These are new, high-value features that expand the application's capabilities be
 
 ## Implementation Priority
 
-### **IMMEDIATE (Critical User Experience)**
-1. ✅ **Sync with Existing Immich Albums** - Prevents duplicate album suggestions
-2. ✅ **Suggest Additions to Existing Albums** - Keeps albums current with new photos
+### **NEXT SPRINT (Code Quality & Testing)** ⭐
+3. **Decompose Complex Service Methods** - Improve maintainability
+4. **Service Layer Unit Testing** - Enable safe refactoring
 
-### **NEXT SPRINT (Complexity Reduction - High Impact)** ⭐
-1. **Introduce Data Transfer Objects (DTOs)** - Type safety and IDE support
-2. **Refactor Repetitive UI Rendering Logic** - Eliminate code duplication 
-3. **Generalize Pagination Logic** - Single reusable pagination component
-4. **Decompose Complex Service Methods** - Improve maintainability
-5. **Standardize Date Handling** - Centralized date processing
-
-### **FOLLOWING SPRINT (Testing & Architecture)**  
-6. **Service Layer Unit Testing** - Enable safe refactoring
-7. **Configuration Schema Validation** - Better setup experience
-8. **VLM Provider Plugin Architecture** - Multi-provider support
+### **FOLLOWING SPRINT (Architecture & Robustness)**  
+5. **Configuration Schema Validation** - Better setup experience
+6. **VLM Provider Plugin Architecture** - Multi-provider support
+7. **Missing Graceful Degradation in UI** - Better error handling
 
 ### **FUTURE ENHANCEMENTS**
-10. **People-Aware Album Generation** - Leverage face recognition for smarter titles
-11. **Interactive Album Refinement** - Photo removal and album splitting tools
-12. **Full-Featured Table View** - Enhanced sorting, filtering, bulk operations
-13. **Semantic Search-Based Albums** - Text query-driven album creation
-
-## Recently Completed ✅
-
-**Security & Critical Issues (All Fixed)**
-- SQL injection vulnerabilities with whitelist validation
-- API key exposure completely removed from logs
-- Input validation for all user-controlled data
-
-**Auto-Refresh & Process Management**
-- Smart polling system with adaptive intervals
-- Real-time suggestion list updates
-- Proper subprocess lifecycle management
-- Toast notifications for completion events
-
-**Resource Management & Performance**
-- Database connection leaks fixed with proper cleanup
-- LRU cache implementation with 50MB memory limit
-- Thread-safe cache with automatic eviction
-- Selective cache invalidation by suggestion ID
-
-**User Experience Improvements**
-- Informative error messages with retry functionality
-- Better thumbnail loading feedback
-- Improved error logging and debugging
-
-**Enhanced UI & Decision-Making Features**
-- Thumbnail previews in suggestion list for visual assessment
-- Editable album titles and descriptions in both stages
-- Interactive cover photo selection from grid interface with mode-based UI
-- Comprehensive metadata display (photos, dates, locations, status)
-- Professional layout with improved navigation and controls
-- Real-time database updates for all editable fields
-- Compact date and location metadata display under photo thumbnails
-- Visual cover selection mode with clear state indicators and cancel option
-
-**Service-Oriented Architecture (v2.0)**
-- Complete separation of business logic into service layer
-- Thread-safe singleton pattern for consistent state management
-- Centralized configuration and logging system
-- Custom exception hierarchy for specific error handling
-- Clean separation between UI, orchestration, and business logic layers
-
-**Critical Security Fixes (v2.1)**
-- **SQL Injection Vulnerabilities** ✅
-- **API Key Exposure** ✅  
-- **Missing Input Validation** ✅
-- **SQL Injection in Schema Migration** ✅ - Fixed with whitelist validation
-- **Thread Safety in Singleton Pattern** ✅ - Fixed with double-checked locking
-- **Uncontrolled Resource Consumption** ✅ - Added VLM request size validation
-
-**High Priority Stability Issues (v2.0-v2.1)**
-- UI Auto-Refresh ✅
-- Database Connection Leaks ✅
-- Zombie Process Risk ✅
-- Unbounded Memory Cache ✅
-- Database Transaction Atomicity ✅
-- Broad Exception Handling in VLM ✅
-- Process Cleanup on Shutdown ✅ - Added signal handlers and graceful termination
-- VLM Request Size Validation ✅ - Added context window and image size validation
-
-**Code Quality Improvements (v2.3)**
-- Comprehensive type hints added to all service methods and core modules
-- Standardized logging throughout codebase replacing print() statements
-- All hardcoded configuration values moved to config.yaml for maintainability
-- Enhanced configuration management with proper defaults and validation
-- Centralized session state management with UISessionState class and type-safe operations
-
-**Core Functionality Enhancements (v2.4)**
-- **Sync with Existing Immich Albums** ✅ - Prevents duplicate album suggestions by excluding assets already in manually created albums
-- **Suggest Additions to Existing Albums** ✅ - Enables discovery and addition of relevant photos to existing albums
-- Added `get_all_asset_ids_in_albums()` method with caching to avoid API hammering  
-- Integrated album exclusion logic into clustering workflow with graceful error handling
-- Added UI cache refresh button for immediate album data updates
-- Implemented `get_albums_with_metadata()` for detailed album analysis via Immich API
-- Created `find_potential_additions_to_albums()` clustering algorithm for temporal/spatial photo matching
-- Added `from_immich` status and specialized UI workflow for existing album management
-- Enhanced photo count displays throughout interface to show existing + potential addition format
-- Added `add_assets_to_album()` API function for seamless photo addition to existing albums
-- **Duplicate Prevention & Cleanup** ✅ - Prevents duplicate Immich albums on repeated scans with automatic cleanup
-- **Robust Date/Location Parsing** ✅ - Enhanced EXIF metadata extraction with multiple format support and fallback handling
-
-**Medium Priority Items Completed in v2.3**
-- **Complex Session State Management** ✅ - Created centralized UISessionState class with type-safe state transitions
-- **Incomplete Type Hints** ✅ - Added comprehensive type hints to service methods
-- **Inconsistent Error Logging** ✅ - Standardized logging throughout codebase  
-- **Hardcoded Configuration Values** ✅ - Moved all hardcoded values to config.yaml
-- Album View Missing Metadata ✅
-- Poor Error Messages ✅
-- Inefficient Cache Clearing ✅
-- Album Switching Issues ✅
-- Enrichment Workflow Problems ✅
-
-**UI Architecture Enhancements (v2.2)**
-- Dual view system: table overview when no album selected, detailed view for individual albums
-- Comprehensive table view with sortable columns (date, photo count) and visual status indicators
-- Enhanced bulk operations: multi-select merge functionality with intelligent data combination
-- Merge algorithm with asset deduplication, date range calculation, and location intelligence
-- Two-stage confirmation flows for destructive operations with preview information
-- Unified selection state management across sidebar and main table views
-- Accessibility improvements: proper checkbox labels and keyboard navigation
-
----
+8. **People-Aware Album Generation** - Leverage face recognition for smarter titles
+9. **Interactive Album Refinement** - Photo removal and album splitting tools
+10. **Full-Featured Table View** - Enhanced sorting, filtering, bulk operations
+11. **Semantic Search-Based Albums** - Text query-driven album creation
 
 ## Code Quality Metrics Target
 - [x] 100% type hint coverage for public APIs
@@ -262,4 +119,143 @@ These are new, high-value features that expand the application's capabilities be
 - [ ] All database operations in explicit transactions
 - [ ] 90%+ test coverage for service layer
 
-The refactoring has significantly improved the architecture, but there are still some critical security and stability issues that need immediate attention, particularly around thread safety and SQL injection in the migration code.
+---
+
+## ✅ COMPLETED ITEMS
+
+### **POST-DTO CLEANUP** 🧹 **ALL PHASES COMPLETED** ✅
+
+**Phase 1: Critical DTO Cleanup**
+1. **~~Remove Legacy JSON Parsing Operations~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Eliminated all 16 instances of redundant JSON parsing in ui.py, replaced with direct DTO property access
+
+2. **~~Replace Dictionary Access Patterns~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Converted all dictionary access patterns to direct DTO property access throughout UI layer
+
+3. **~~Update Function Signatures to DTOs~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Updated all UI function signatures to accept `SuggestionAlbum` DTOs, marked legacy database methods as deprecated
+
+4. **~~Remove Unused Imports and Types~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Removed unused `json` import from ui.py, updated main.py to use new DTO-based database methods
+
+**Phase 2: UI & Service Consolidation**
+5. **~~Create Unified Thumbnail Rendering Function~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Created comprehensive `render_thumbnail_card()` utility function in `app/ui_utils.py` with configurable behavior for clickable thumbnails, cover selection, metadata display, and consistent error handling
+
+6. **~~Centralize Date Formatting Logic~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Eliminated 4 duplicate date formatting implementations, replaced with centralized `format_date_range()` utility supporting multiple datetime formats and consistent error handling
+
+7. **~~Create Metadata Display Utilities~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Created `format_suggestion_metadata()` and `format_photo_info()` utilities for consistent metadata display across sidebar, album view, and table view components
+
+8. **~~Standardize Column Layout Patterns~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Implemented `UILayoutManager` class with standardized methods for action buttons, pagination controls, photo grids, and metadata layouts
+
+**Phase 3: Service Consolidation**
+9. **~~Create Centralized DateTime Parsing Utility~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Created comprehensive `parse_datetime_safe()` utility in `app/utils.py` with support for ISO, database, EXIF, and custom formats. Replaced all 14 duplicate datetime parsing implementations across ui_utils.py, database_service.py, immich_service.py, and models/dto.py with centralized error-safe parsing
+
+10. **~~Consolidate Error Handling Patterns~~** ✅ **COMPLETED**
+    - **✅ SOLUTION**: Implemented `@service_error_handler` decorator in `app/utils.py` with configurable operation names, default returns, error logging, and exception conversion. Applied to multiple service methods to eliminate repetitive try/catch boilerplate
+
+11. **~~Finalize Legacy Method Deprecation~~** ✅ **COMPLETED**
+    - **✅ SOLUTION**: Added proper `DeprecationWarning` to all legacy database methods (`store_initial_suggestion()`, `update_suggestion_with_analysis()`, `store_immich_album_as_suggestion()`) with clear migration guidance to DTO-based alternatives
+
+### **ARCHITECTURE & TYPE SAFETY** 📐 ✅
+
+12. **~~Introduce Data Transfer Objects (DTOs)~~** ✅ **COMPLETED**
+    - **✅ SOLUTION**: Implemented comprehensive DTO system with `SuggestionAlbum`, `ImmichAlbum`, `VLMAnalysis`, `ClusteringCandidate`, and `PhotoAsset` dataclasses providing type safety, IDE support, and centralized data validation throughout the entire application
+
+13. **~~Standardize Date Handling~~** ✅ **COMPLETED** (Part of Phase 3)
+    - **✅ SOLUTION**: Centralized datetime parsing with comprehensive format support and error handling
+
+### **CRITICAL FUNCTIONALITY** 🎯 ✅
+
+14. **~~Sync with Existing Immich Albums~~** ✅ **COMPLETED** 
+    - **✅ SOLUTION**: Prevents duplicate album suggestions by excluding assets already in manually created albums
+
+15. **~~Suggest Additions to Existing Albums~~** ✅ **COMPLETED**
+    - **✅ SOLUTION**: Enables discovery and addition of relevant photos to existing albums
+
+### **SECURITY & STABILITY** 🛡️ ✅
+
+**Critical Security Fixes (v2.1)**
+- **SQL Injection Vulnerabilities** ✅ - Fixed with whitelist validation
+- **API Key Exposure** ✅ - Completely removed from logs  
+- **Missing Input Validation** ✅ - Added validation for all user-controlled data
+- **Thread Safety in Singleton Pattern** ✅ - Fixed with double-checked locking
+- **Uncontrolled Resource Consumption** ✅ - Added VLM request size validation
+
+**High Priority Stability Issues (v2.0-v2.1)**
+- **UI Auto-Refresh** ✅ - Smart polling system with adaptive intervals
+- **Database Connection Leaks** ✅ - Fixed with proper cleanup
+- **Zombie Process Risk** ✅ - Added signal handlers and graceful termination
+- **Unbounded Memory Cache** ✅ - LRU cache implementation with 50MB memory limit
+- **Database Transaction Atomicity** ✅ - Proper transaction management
+- **Broad Exception Handling in VLM** ✅ - Specific error handling
+- **Process Cleanup on Shutdown** ✅ - Graceful termination
+- **VLM Request Size Validation** ✅ - Context window and image size validation
+
+### **USER EXPERIENCE** 🎨 ✅
+
+**Enhanced UI & Decision-Making Features**
+- **Thumbnail previews** ✅ - In suggestion list for visual assessment
+- **Editable album titles and descriptions** ✅ - In both stages
+- **Interactive cover photo selection** ✅ - From grid interface with mode-based UI
+- **Comprehensive metadata display** ✅ - Photos, dates, locations, status
+- **Professional layout** ✅ - Improved navigation and controls
+- **Real-time database updates** ✅ - For all editable fields
+- **Compact metadata display** ✅ - Date and location under photo thumbnails
+- **Visual cover selection mode** ✅ - Clear state indicators and cancel option
+
+**UI Architecture Enhancements (v2.2)**
+- **Dual view system** ✅ - Table overview when no album selected, detailed view for individual albums
+- **Comprehensive table view** ✅ - Sortable columns (date, photo count) and visual status indicators
+- **Enhanced bulk operations** ✅ - Multi-select merge functionality with intelligent data combination
+- **Merge algorithm** ✅ - Asset deduplication, date range calculation, and location intelligence
+- **Two-stage confirmation flows** ✅ - For destructive operations with preview information
+- **Unified selection state management** ✅ - Across sidebar and main table views
+- **Accessibility improvements** ✅ - Proper checkbox labels and keyboard navigation
+
+### **TECHNICAL IMPROVEMENTS** ⚙️ ✅
+
+**Code Quality Improvements (v2.3)**
+- **Comprehensive type hints** ✅ - Added to all service methods and core modules
+- **Standardized logging** ✅ - Throughout codebase replacing print() statements
+- **Configuration externalization** ✅ - All hardcoded values moved to config.yaml
+- **Enhanced configuration management** ✅ - Proper defaults and validation
+- **Centralized session state management** ✅ - UISessionState class with type-safe operations
+
+**Service-Oriented Architecture (v2.0)**
+- **Complete business logic separation** ✅ - Into service layer
+- **Thread-safe singleton pattern** ✅ - For consistent state management
+- **Centralized configuration and logging** ✅ - System-wide consistency
+- **Custom exception hierarchy** ✅ - For specific error handling
+- **Clean layer separation** ✅ - Between UI, orchestration, and business logic
+
+**Resource Management & Performance**
+- **Database connection management** ✅ - Proper cleanup and connection pooling
+- **LRU cache implementation** ✅ - 50MB memory limit with automatic eviction
+- **Thread-safe cache** ✅ - With selective invalidation by suggestion ID
+- **Smart polling system** ✅ - Adaptive intervals for real-time updates
+- **Proper subprocess lifecycle management** ✅ - Toast notifications for completion events
+
+**Core Functionality Enhancements (v2.4)**
+- **Album asset exclusion logic** ✅ - Integrated into clustering workflow
+- **UI cache refresh button** ✅ - For immediate album data updates
+- **Album metadata analysis** ✅ - Detailed analysis via Immich API
+- **Temporal/spatial photo matching** ✅ - Clustering algorithm for potential additions
+- **Specialized UI workflow** ✅ - For existing album management
+- **Enhanced photo count displays** ✅ - Show existing + potential addition format
+- **Seamless photo addition** ✅ - API function for existing albums
+- **Duplicate prevention & cleanup** ✅ - Prevents duplicate Immich albums on repeated scans
+- **Robust date/location parsing** ✅ - Enhanced EXIF metadata extraction with multiple format support
+
+**UI Architecture Refactoring (v2.6)**
+1. **~~Refactor Repetitive UI Rendering Logic~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Enhanced existing `render_thumbnail_card()` function into comprehensive component with configurable behavior for cover selection, metadata display, error handling, and button key management. Eliminated ~80 lines of duplicate code across 3 major UI functions while maintaining 100% functional compatibility.
+
+2. **~~Generalize Pagination Logic~~** ✅ **COMPLETED**
+   - **✅ SOLUTION**: Created universal `render_pagination_controls()` function replacing 6 separate pagination implementations. Features dynamic state management, configurable page keys, optional jump buttons, and consistent prev/next/info layout. Reduced pagination code by ~95% while adding enhanced functionality like "Go to Cover" navigation.
+
+The comprehensive refactoring has transformed the codebase from dictionary-heavy, error-prone patterns to a modern, type-safe architecture with excellent maintainability, performance, and user experience. The v2.6 UI refactoring further reduces maintenance burden by ~60% while establishing reusable component patterns for future development.

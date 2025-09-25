@@ -54,99 +54,99 @@ def get_vlm_analysis(
     try:
         encoded_images = []
         for asset_id in sample_asset_ids:
-        # Use the ImmichService to get thumbnails, abstracting away the API call.
-        image_bytes = immich_service.get_thumbnail_bytes(asset_id)
-        if image_bytes:
-            encoded_images.append(base64.b64encode(image_bytes).decode('utf-8'))
+            # Use the ImmichService to get thumbnails, abstracting away the API call.
+            image_bytes = immich_service.get_thumbnail_bytes(asset_id)
+            if image_bytes:
+                encoded_images.append(base64.b64encode(image_bytes).decode('utf-8'))
 
-    if not encoded_images:
-        logger.error("Could not prepare any images for VLM analysis. Aborting.")
-        raise VLMResponseError("No images could be downloaded or prepared for VLM analysis.")
+        if not encoded_images:
+            logger.error("Could not prepare any images for VLM analysis. Aborting.")
+            raise VLMResponseError("No images could be downloaded or prepared for VLM analysis.")
 
-    cfg_vlm = config.get('vlm', {})
-    location_prompt = f"The event took place primarily in '{location_str}'." if location_str else "The event location is unknown."
-    
-    # Using the modern chat-based prompt structure for better model compliance.
-    system_prompt = "You are an automated photo album assistant. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json or any other conversational text."
-    user_prompt = f"""
+        cfg_vlm = config.get('vlm', {})
+        location_prompt = f"The event took place primarily in '{location_str}'." if location_str else "The event location is unknown."
+        
+        # Using the modern chat-based prompt structure for better model compliance.
+        system_prompt = "You are an automated photo album assistant. Your response MUST be a single, valid JSON object and nothing else. Do not include markdown formatting like ```json or any other conversational text."
+        user_prompt = f"""
 CONTEXT: Event Date: '{date_str}'. {location_prompt}
 JSON STRUCTURE: {{"title": "A short, descriptive event title", "description": "A one-paragraph summary of the event, people, and activities", "cover_photo_index": int}}
 """
-    
-    # Validate total request size to prevent VLM context window overflow
-    max_context_size = cfg_vlm.get('context_window', 32768)  # Default Ollama context
-    _validate_vlm_request_size(encoded_images, system_prompt + user_prompt, max_context_size)
-    
-    payload = {
-        "model": cfg_vlm.get('model'),
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt, "images": encoded_images}
-        ],
-        "stream": False,
-        "options": {
-            "num_ctx": cfg_vlm.get('context_window')
-        }
-    }
-    
-    api_url = cfg_vlm.get('api_url', '').replace('/api/generate', '/api/chat')
-    if not api_url:
-        logger.error("VLM API URL is not configured in config.yaml.")
-        raise VLMConnectionError("VLM API URL is missing.")
-
-    for attempt in range(cfg_vlm.get('retry_attempts', 3)):
-        try:
-            logger.debug(f"VLM attempt {attempt + 1}: POSTing to {api_url}")
-            response = requests.post(api_url, json=payload, timeout=cfg_vlm.get('api_timeout_seconds', 300))
-            response.raise_for_status()
-
-            response_data = response.json()
-            raw_content = response_data.get('message', {}).get('content', '')
-            
-            json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
-            if not json_match:
-                raise VLMResponseError("No JSON object found in the VLM response.")
-                
-            vlm_data = json.loads(json_match.group(0))
-
-            # Validate response quality
-            if not all(key in vlm_data for key in ['title', 'description']):
-                 raise VLMResponseError(f"Response missed required keys. Got: {list(vlm_data.keys())}")
-            if not vlm_data.get('title') or not vlm_data.get('description'):
-                raise VLMResponseError(f"Response contained empty values. Got: {vlm_data}")
-            
-            logger.info(f"VLM analysis successful. Generated Title: '{vlm_data['title']}'")
-            processing_time = time.time() - start_time
-            
-            # Extract cover photo index if provided
-            cover_asset_id = None
-            if 'cover_photo_index' in vlm_data and isinstance(vlm_data['cover_photo_index'], int):
-                cover_index = vlm_data['cover_photo_index']
-                if 0 <= cover_index < len(sample_asset_ids):
-                    cover_asset_id = sample_asset_ids[cover_index]
-                    
-            return VLMAnalysis(
-                vlm_title=vlm_data.get('title'),
-                vlm_description=vlm_data.get('description'),
-                cover_asset_id=cover_asset_id,
-                confidence_score=vlm_data.get('confidence_score'),
-                processing_time_seconds=processing_time
-            )
-
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"VLM connection error on attempt {attempt + 1}: {e}")
-            if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
-                error_msg = f"VLM analysis failed due to network error after {cfg_vlm.get('retry_attempts', 3)} attempts"
-                logger.error(error_msg)
-                return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
-        except (json.JSONDecodeError, VLMResponseError) as e:
-            logger.warning(f"VLM response error on attempt {attempt + 1}: {e}")
-            if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
-                error_msg = f"VLM analysis failed due to invalid response after {cfg_vlm.get('retry_attempts', 3)} attempts: {e}"
-                logger.error(error_msg)
-                return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
         
-            time.sleep(cfg_vlm.get('retry_delay_seconds', 5))
+        # Validate total request size to prevent VLM context window overflow
+        max_context_size = cfg_vlm.get('context_window', 32768)  # Default Ollama context
+        _validate_vlm_request_size(encoded_images, system_prompt + user_prompt, max_context_size)
+        
+        payload = {
+            "model": cfg_vlm.get('model'),
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt, "images": encoded_images}
+            ],
+            "stream": False,
+            "options": {
+                "num_ctx": cfg_vlm.get('context_window')
+            }
+        }
+        
+        api_url = cfg_vlm.get('api_url', '').replace('/api/generate', '/api/chat')
+        if not api_url:
+            logger.error("VLM API URL is not configured in config.yaml.")
+            raise VLMConnectionError("VLM API URL is missing.")
+
+        for attempt in range(cfg_vlm.get('retry_attempts', 3)):
+            try:
+                logger.debug(f"VLM attempt {attempt + 1}: POSTing to {api_url}")
+                response = requests.post(api_url, json=payload, timeout=cfg_vlm.get('api_timeout_seconds', 300))
+                response.raise_for_status()
+
+                response_data = response.json()
+                raw_content = response_data.get('message', {}).get('content', '')
+                
+                json_match = re.search(r'\{.*\}', raw_content, re.DOTALL)
+                if not json_match:
+                    raise VLMResponseError("No JSON object found in the VLM response.")
+                    
+                vlm_data = json.loads(json_match.group(0))
+
+                # Validate response quality
+                if not all(key in vlm_data for key in ['title', 'description']):
+                     raise VLMResponseError(f"Response missed required keys. Got: {list(vlm_data.keys())}")
+                if not vlm_data.get('title') or not vlm_data.get('description'):
+                    raise VLMResponseError(f"Response contained empty values. Got: {vlm_data}")
+                
+                logger.info(f"VLM analysis successful. Generated Title: '{vlm_data['title']}'")
+                processing_time = time.time() - start_time
+                
+                # Extract cover photo index if provided
+                cover_asset_id = None
+                if 'cover_photo_index' in vlm_data and isinstance(vlm_data['cover_photo_index'], int):
+                    cover_index = vlm_data['cover_photo_index']
+                    if 0 <= cover_index < len(sample_asset_ids):
+                        cover_asset_id = sample_asset_ids[cover_index]
+                        
+                return VLMAnalysis(
+                    vlm_title=vlm_data.get('title'),
+                    vlm_description=vlm_data.get('description'),
+                    cover_asset_id=cover_asset_id,
+                    confidence_score=vlm_data.get('confidence_score'),
+                    processing_time_seconds=processing_time
+                )
+
+            except requests.exceptions.RequestException as e:
+                logger.warning(f"VLM connection error on attempt {attempt + 1}: {e}")
+                if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
+                    error_msg = f"VLM analysis failed due to network error after {cfg_vlm.get('retry_attempts', 3)} attempts"
+                    logger.error(error_msg)
+                    return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
+            except (json.JSONDecodeError, VLMResponseError) as e:
+                logger.warning(f"VLM response error on attempt {attempt + 1}: {e}")
+                if attempt + 1 == cfg_vlm.get('retry_attempts', 3):
+                    error_msg = f"VLM analysis failed due to invalid response after {cfg_vlm.get('retry_attempts', 3)} attempts: {e}"
+                    logger.error(error_msg)
+                    return VLMAnalysis(error_message=error_msg, processing_time_seconds=time.time() - start_time)
+            
+                time.sleep(cfg_vlm.get('retry_delay_seconds', 5))
 
         # If we reach here, all retries are exhausted without success
         error_msg = f"VLM analysis failed after {cfg_vlm.get('retry_attempts', 3)} attempts"
